@@ -7,7 +7,9 @@ whether each run's process is still alive.
 from __future__ import annotations
 
 import fcntl
+import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 
@@ -37,6 +39,8 @@ class RunInfo:
     run_dir: Path
     parked_reason: str | None = None
     has_events: bool = False
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
 
     @property
     def stage_index(self) -> int:
@@ -131,6 +135,52 @@ def _determine_status(
     return RunStatus.CRASHED
 
 
+def _parse_ts(raw: str) -> datetime | None:
+    """Parse ISO 8601 timestamp from events.jsonl."""
+    try:
+        raw = raw.replace("Z", "+00:00")
+        return datetime.fromisoformat(raw)
+    except (ValueError, TypeError):
+        return None
+
+
+def _read_event_timestamps(
+    events_path: Path,
+) -> tuple[datetime | None, datetime | None]:
+    """Extract start and end timestamps from events.jsonl.
+
+    Reads first line for pipeline_start ts, last line for pipeline_end ts.
+    """
+    if not events_path.exists():
+        return None, None
+
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+
+    try:
+        with open(events_path) as f:
+            first_line = f.readline().strip()
+            if first_line:
+                ev = json.loads(first_line)
+                if ev.get("type") == "pipeline_start":
+                    started_at = _parse_ts(ev.get("ts", ""))
+
+            last_line = first_line
+            for line in f:
+                stripped = line.strip()
+                if stripped:
+                    last_line = stripped
+
+            if last_line and last_line != first_line:
+                ev = json.loads(last_line)
+                if ev.get("type") == "pipeline_end":
+                    ended_at = _parse_ts(ev.get("ts", ""))
+    except (json.JSONDecodeError, OSError):
+        pass
+
+    return started_at, ended_at
+
+
 def discover_runs(project_dir: Path) -> list[RunInfo]:
     """Scan .forger/artifacts/ for all runs and their status.
 
@@ -171,6 +221,7 @@ def discover_runs(project_dir: Path) -> list[RunInfo]:
             )
 
             events_path = run_dir / "events.jsonl"
+            started_at, ended_at = _read_event_timestamps(events_path)
 
             runs.append(
                 RunInfo(
@@ -182,7 +233,12 @@ def discover_runs(project_dir: Path) -> list[RunInfo]:
                     run_dir=run_dir,
                     parked_reason=state.pipeline.parked_reason,
                     has_events=events_path.exists(),
+                    started_at=started_at,
+                    ended_at=ended_at,
                 )
             )
 
+    # Most recent first; runs without timestamps sort last
+    _epoch = datetime.min.replace(tzinfo=UTC)
+    runs.sort(key=lambda r: r.started_at or _epoch, reverse=True)
     return runs
