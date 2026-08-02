@@ -9,9 +9,9 @@ Apply the chosen fix option. Transition: `fix-chosen` → `fixed`. Verification 
 1. Read `fix-options.md` — the resolved option is the spec. Also read `analysis.md` and `proof.md`.
 2. If a review loop-back: read latest `reviews/review-*-feedback.md` — its items are additional spec.
 3. Implement the resolved option exactly as specified.
-4. Run the proof test. Must pass (exit code 0). If not, iterate on the fix.
-5. Run the affected test suite. Must pass.
-6. Run lint. Must pass.
+4. Run the proof test using the `test_file` project command (see Run Context). Must pass (exit code 0). If not, iterate on the fix.
+5. Run the affected test suite using the `test` project command. Must pass.
+6. Run lint using the `lint` project command. Must pass.
 7. Record evidence with one-line `summary` (what passed/failed, e.g. "3 tests pass, 0 fail" or "AssertionError in test_foo"):
    - `evidence.fix_verified`: path, exit_code, last_run, summary
    - `evidence.lint`: exit_code, last_run, summary
