@@ -1,0 +1,7 @@
+label: "Sentry Issue"
+params:
+  - key: issue_id
+    label: "Issue ID"
+    type: text
+    placeholder: "PROJ-123"
+    required: true
