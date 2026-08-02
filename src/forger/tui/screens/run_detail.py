@@ -63,10 +63,17 @@ def _format_stage_end(ev: dict) -> Text:
 
     t.append(f"[{short_ts}] ", style="bold dim")
 
+    success: bool = ev.get("success", True)
     token_str = f"{tokens / 1000:.1f}k" if tokens >= 1000 else str(tokens)
-    t.append(f"{token_str} ", style="green")
+    t.append(f"{token_str} ", style="green" if success else "red")
     t.append(f"[{name}] ", style="bold")
-    t.append("✓", style="green")
+    if success:
+        t.append("✓", style="green")
+    else:
+        t.append("✗", style="red")
+        error: str = ev.get("error") or ""
+        if error:
+            t.append(f" {error}", style="red")
     if new_stage:
         t.append(f" → {new_stage}", style="")
     t.append(f" (+{elapsed}s / +{token_str})", style="dim")
@@ -100,11 +107,14 @@ def _format_pipeline_event(ev: dict) -> Text:
             f"{total_tokens / 1000:.1f}k" if total_tokens >= 1000 else str(total_tokens)
         )
         t.append(f"[{short_ts}] ", style="bold dim")
-        t.append(f"Pipeline finished → {final}", style="bold green")
-        t.append(f" ({token_str} tokens, {total_elapsed}s)", style="dim")
         blocked: str | None = ev.get("blocked_reason")
         if blocked:
+            t.append(f"Pipeline failed → {final}", style="bold red")
+            t.append(f" ({token_str} tokens, {total_elapsed}s)", style="dim")
             t.append(f" — {blocked}", style="yellow")
+        else:
+            t.append(f"Pipeline finished → {final}", style="bold green")
+            t.append(f" ({token_str} tokens, {total_elapsed}s)", style="dim")
     return t
 
 
@@ -138,7 +148,7 @@ def _format_event(ev: dict) -> Text | None:
     return None
 
 
-def _find_events_paths(run: RunInfo) -> list[Path]:
+def _find_events_paths(run: RunInfo, project_dir: Path) -> list[Path]:
     """Return all events.jsonl paths for a run, including worktree.
 
     Canonical path first, then worktree path if it exists.
@@ -150,7 +160,6 @@ def _find_events_paths(run: RunInfo) -> list[Path]:
 
     from forger import worktree
 
-    project_dir = run.run_dir.parent.parent.parent
     wt_path = worktree.path_for(run.issue_id, project_dir)
     if wt_path:
         wt_events = worktree.worktree_run_dir(wt_path) / "events.jsonl"
@@ -202,6 +211,13 @@ class RunDetailScreen(Screen):
         self.run = run
         self._file_pos: int = 0
         self._current_events_path: Path | None = None
+        self._live_stage: str | None = None
+        self._stage_times: dict[str, int] = {}
+        self._stage_start_ts: dict[str, str] = {}
+
+    @property
+    def _project_dir(self) -> Path:
+        return self.app.project_dir  # type: ignore[attr-defined, return-value, no-any-return]
 
     def compose(self):
         yield Header(show_clock=True)
@@ -225,14 +241,63 @@ class RunDetailScreen(Screen):
         for r in runs:
             if r.issue_id == self.run.issue_id and r.source == self.run.source:
                 self.run = r
-                self.query_one("#run-header", RunHeader).update_run(r)
-                self.query_one("#stage-bar", StageProgressBar).update_run(r)
                 break
+        self._update_widgets()
+
+    def _track_event(self, ev: dict) -> None:
+        """Track stage transitions and timings from events."""
+        event_type: str = ev.get("type", "")
+        if event_type == "pipeline_start":
+            self._stage_times.clear()
+            self._stage_start_ts.clear()
+            self._live_stage = None
+        elif event_type == "stage_start":
+            name: str = ev.get("name", "")
+            self._live_stage = name
+            self._stage_start_ts[name] = ev.get("ts", "")
+            self._stage_times.pop(name, None)
+        elif event_type == "stage_end":
+            from forger.pipeline import STAGE_BY_NAME
+
+            name = ev.get("name", "")
+            elapsed: int = ev.get("elapsed_seconds", 0)
+            if elapsed:
+                self._stage_times[name] = elapsed
+            spec = STAGE_BY_NAME.get(name)
+            if spec:
+                self._live_stage = spec.post_state
+
+    def _update_widgets(self) -> None:
+        """Update header and stage bar, preferring live stage over change.md."""
+        run = self.run
+        if self._live_stage and self._live_stage != run.stage:
+            from dataclasses import replace
+
+            run = replace(run, stage=self._live_stage)
+        self.query_one("#run-header", RunHeader).update_run(run)
+
+        times = dict(self._stage_times)
+        if self._live_stage and self._live_stage not in times:
+            ts_raw = self._stage_start_ts.get(self._live_stage, "")
+            if ts_raw:
+                from forger.tui.discovery import _parse_ts
+
+                started = _parse_ts(ts_raw)
+                if started:
+                    from datetime import UTC, datetime
+
+                    elapsed = int((datetime.now(UTC) - started).total_seconds())
+                    if elapsed >= 0:
+                        times[self._live_stage] = elapsed
+
+        bar = self.query_one("#stage-bar", StageProgressBar)
+        bar.update_run(run)
+        bar.update_times(times)
 
     def _load_existing_events(self) -> None:
         """Load all existing events from events.jsonl files."""
         log = self.query_one("#event-log", RichLog)
-        paths = _find_events_paths(self.run)
+        paths = _find_events_paths(self.run, self._project_dir)
 
         if not paths:
             log.write(Text("No events.jsonl found for this run.", style="dim"))
@@ -247,6 +312,7 @@ class RunDetailScreen(Screen):
                             continue
                         try:
                             ev = json.loads(stripped)
+                            self._track_event(ev)
                             formatted = _format_event(ev)
                             if formatted:
                                 log.write(formatted)
@@ -256,6 +322,7 @@ class RunDetailScreen(Screen):
                     self._current_events_path = events_path
             except OSError:
                 continue
+        self._update_widgets()
 
     @work(exclusive=True, group="tail")
     async def _tail_events(self) -> None:
@@ -268,7 +335,7 @@ class RunDetailScreen(Screen):
             await asyncio.sleep(0.5)
 
             # Check for worktree events.jsonl appearing
-            paths = _find_events_paths(self.run)
+            paths = _find_events_paths(self.run, self._project_dir)
             if paths:
                 latest_path = paths[-1]
                 if (
@@ -301,9 +368,12 @@ class RunDetailScreen(Screen):
                         continue
                     try:
                         ev = json.loads(stripped)
+                        self._track_event(ev)
                         formatted = _format_event(ev)
                         if formatted:
                             log.write(formatted)
+                        if ev.get("type") in ("stage_start", "stage_end"):
+                            self._update_widgets()
                         if ev.get("type") == "pipeline_end":
                             self._refresh_run_info()
                             return
