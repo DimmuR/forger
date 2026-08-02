@@ -7,6 +7,7 @@ __all__ = [
     "run_pipeline",
 ]
 
+import os
 import shutil
 import time
 from dataclasses import dataclass, replace
@@ -131,6 +132,7 @@ class PipelineRunner:
         self.total_tokens = 0
         self.pipeline_start = time.monotonic()
         self.events = EventEmitter(self.run_dir)
+        self._lock_fd: int | None = None
 
     def _outcome(
         self,
@@ -145,8 +147,24 @@ class PipelineRunner:
             final_run_dir=self.canonical_run_dir,
         )
 
+    def _acquire_lock(self) -> None:
+        """Acquire exclusive fcntl lock for this run."""
+        import contextlib
+
+        from forger.tui.discovery import acquire_lock
+
+        with contextlib.suppress(OSError):
+            self._lock_fd = acquire_lock(self.issue_id, self.project_dir)
+
+    def _release_lock(self) -> None:
+        """Release the run lock if held."""
+        if self._lock_fd is not None:
+            os.close(self._lock_fd)
+            self._lock_fd = None
+
     def run(self) -> RunOutcome:
         """Main orchestration loop. Runs stages until blocked or terminal."""
+        self._acquire_lock()
         self.events.emit(
             "pipeline_start",
             source=self.source,
@@ -174,6 +192,7 @@ class PipelineRunner:
         finally:
             self._cleanup_worktree()
             self.events.close()
+            self._release_lock()
 
     def _emit_pipeline_end(self, outcome: RunOutcome) -> None:
         elapsed = time.monotonic() - self.pipeline_start
