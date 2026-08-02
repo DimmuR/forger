@@ -24,7 +24,22 @@ Produce deliverable files for push. Transition: `reviewed` → `drafted`. Pure t
      at the bottom as `**Sentry:** <url>` or `**Source:** <url>`.
 3. Write `commit.txt`: subject line + body summarizing root cause and fix.
 4. Write `changelog.txt`: one line describing the fix.
-5. Write `pr.md`: first line `# <title>`. Body: problem, root cause, chosen option + why, proof test (red→green), verification evidence. Check review files in `reviews/` — if any reviewer verdict is `warned`, add `## Review notes (overridden)` section listing warned findings.
+5. Write `pr.md`: first line is `# <title>` (push harness takes line 1 for `gh --title`).
+   Title must start with `fix:` followed by the user-perspective symptom from the issue
+   title (echo it, don't rephrase into implementation jargon).
+   Body sections:
+   - `Closes #<issue-number>` — standalone line linking to the issue. No problem
+     restatement; the issue already describes the symptom.
+   - **Root cause** — 3-5 sentences in narrative style. May reference file paths and
+     handler/function names inline, but no line numbers. Explain the call chain that
+     leads to the failure clearly enough that a reviewer unfamiliar with the code
+     can follow it.
+   - **Fix** — 2-3 sentences describing what was changed and why this approach.
+     No option letters, no rejected alternatives, no comparison table.
+   - **Proof test** — one line per test. Format:
+     `\`test_name\`` — fails before fix (`ExceptionName`), passes after.
+   Do not include: verification evidence, impact stats, option comparisons,
+   review override notes, or environment names.
 6. Bump `updated`. Do NOT modify `pipeline.stage` — the harness handles transitions.
 
 ## Outputs
@@ -35,5 +50,5 @@ Produce deliverable files for push. Transition: `reviewed` → `drafted`. Pure t
 
 - Never invent content not grounded in run artifacts.
 - Never write placeholder values.
-- Never omit warned review findings from pr.md.
+- Never restate the problem in pr.md — the linked issue covers it.
 - Never touch application code, tests, or git.
