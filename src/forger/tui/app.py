@@ -22,6 +22,11 @@ class ForgerTUI(App):
 
     CSS_PATH = "forger.tcss"
 
+    HORIZONTAL_BREAKPOINTS = [  # noqa: RUF012  # mypy rejects ClassVar override
+        (0, "-narrow"),
+        (120, "-wide"),
+    ]
+
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("ctrl+q", "quit", "Quit"),
     ]

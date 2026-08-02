@@ -15,7 +15,7 @@ RunListScreen #title-bar {
     width: 100%;
     content-align: center middle;
     padding: 0 2;
-    background: $primary-darken-3;
+    border: solid $primary-lighten-3;
     color: $text;
     text-style: bold;
 }
@@ -51,10 +51,68 @@ RunDetailScreen #stage-bar {
     border-bottom: solid $primary-lighten-3;
 }
 
-RunDetailScreen #event-log {
+RunDetailScreen #main-content {
     height: 1fr;
+}
+
+RunDetailScreen #event-log {
+    width: 1fr;
+    height: 100%;
     padding: 0 1;
     scrollbar-size: 1 1;
+}
+
+/* ── Artifact Browser ─────────────────────────────────── */
+
+RunDetailScreen #artifact-browser {
+    width: 1fr;
+    height: 100%;
+    border-left: solid $primary-lighten-3;
+}
+
+RunDetailScreen #artifact-browser.-hidden {
+    display: none;
+}
+
+RunDetailScreen #artifact-list {
+    height: 25%;
+    overflow-y: auto;
+    scrollbar-size: 1 1;
+}
+
+RunDetailScreen #artifact-preview {
+    height: 1fr;
+    padding: 0 1;
+    border-top: solid $primary-lighten-3;
+    overflow: auto auto;
+    scrollbar-size: 1 1;
+}
+
+RunDetailScreen #artifact-empty {
+    height: auto;
+    padding: 1 2;
+    color: $text-muted;
+    text-style: italic;
+}
+
+/* Wide layout: preview beside file list */
+Screen.-wide RunDetailScreen #artifact-browser {
+    width: 1fr;
+    layout: horizontal;
+}
+
+Screen.-wide RunDetailScreen #artifact-list {
+    width: 35;
+    height: 100%;
+    overflow-y: auto;
+}
+
+Screen.-wide RunDetailScreen #artifact-preview {
+    width: 1fr;
+    height: 100%;
+    overflow: auto auto;
+    border-top: none;
+    border-left: solid $primary-lighten-3;
 }
 
 RunDetailScreen #run-gone {

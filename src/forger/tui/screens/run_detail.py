@@ -11,6 +11,7 @@ from typing import ClassVar
 from rich.text import Text
 from textual import work
 from textual.binding import Binding, BindingType
+from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Header, Label, RichLog
 
@@ -18,6 +19,7 @@ from forger import worktree
 from forger.pipeline import STAGE_BY_NAME
 from forger.tui.constants import format_tokens
 from forger.tui.discovery import RunInfo, RunStatus, _parse_ts, discover_runs
+from forger.tui.widgets.artifact_browser import ArtifactBrowser
 from forger.tui.widgets.run_header import RunHeader
 from forger.tui.widgets.stage_bar import StageProgressBar
 
@@ -178,6 +180,7 @@ class RunDetailScreen(Screen):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "go_back", "Back", show=False),
         Binding("q", "go_back", "Back"),
+        Binding("a", "toggle_artifacts", "Artifacts"),
         Binding("ctrl+q", "quit_app", "Quit"),
     ]
 
@@ -201,9 +204,17 @@ class RunDetailScreen(Screen):
         yield Header(show_clock=True)
         yield RunHeader(self.run, id="run-header")
         yield StageProgressBar(self.run, id="stage-bar")
-        yield RichLog(
-            id="event-log", highlight=True, markup=False, wrap=True, max_lines=5000
-        )
+        with Horizontal(id="main-content"):
+            yield RichLog(
+                id="event-log",
+                highlight=True,
+                markup=False,
+                wrap=True,
+                max_lines=5000,
+            )
+            yield ArtifactBrowser(
+                self.run.run_dir, id="artifact-browser", classes="-hidden"
+            )
         yield Label(
             "Run directory no longer exists. Press q to go back.",
             id="run-gone",
@@ -232,6 +243,9 @@ class RunDetailScreen(Screen):
             self._show_run_gone()
             return
         self._update_widgets()
+        browser = self.query_one("#artifact-browser", ArtifactBrowser)
+        if not browser.has_class("-hidden"):
+            browser.refresh_artifacts()
 
     def _show_run_gone(self) -> None:
         if self._run_gone:
@@ -376,6 +390,15 @@ class RunDetailScreen(Screen):
                         continue
             except OSError:
                 continue
+
+    def action_toggle_artifacts(self) -> None:
+        browser = self.query_one("#artifact-browser", ArtifactBrowser)
+        browser.toggle_class("-hidden")
+        if browser.has_class("-hidden"):
+            self.set_focus(self.query_one("#event-log"))
+        else:
+            browser.refresh_artifacts()
+            self.set_focus(self.query_one("#artifact-list"))
 
     def action_go_back(self) -> None:
         self.app.pop_screen()
