@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import ClassVar
 
 from rich.text import Text
@@ -11,7 +12,7 @@ from textual.binding import Binding, BindingType
 from textual.screen import Screen
 from textual.widgets import Footer, Header, RichLog
 
-from forger.tui.discovery import RunInfo, RunStatus
+from forger.tui.discovery import RunInfo, RunStatus, discover_runs
 from forger.tui.widgets.run_header import RunHeader
 from forger.tui.widgets.stage_bar import StageProgressBar
 
@@ -66,7 +67,8 @@ def _format_stage_end(ev: dict) -> Text:
     t.append(f"{token_str} ", style="green")
     t.append(f"[{name}] ", style="bold")
     t.append("✓", style="green")
-    t.append(f" → {new_stage}", style="")
+    if new_stage:
+        t.append(f" → {new_stage}", style="")
     t.append(f" (+{elapsed}s / +{token_str})", style="dim")
     return t
 
@@ -136,6 +138,28 @@ def _format_event(ev: dict) -> Text | None:
     return None
 
 
+def _find_events_paths(run: RunInfo) -> list[Path]:
+    """Return all events.jsonl paths for a run, including worktree.
+
+    Canonical path first, then worktree path if it exists.
+    """
+    paths: list[Path] = []
+    canonical = run.run_dir / "events.jsonl"
+    if canonical.exists():
+        paths.append(canonical)
+
+    from forger import worktree
+
+    project_dir = run.run_dir.parent.parent.parent
+    wt_path = worktree.path_for(run.issue_id, project_dir)
+    if wt_path:
+        wt_events = worktree.worktree_run_dir(wt_path) / "events.jsonl"
+        if wt_events.exists() and wt_events != canonical:
+            paths.append(wt_events)
+
+    return paths
+
+
 class RunDetailScreen(Screen):
     """Detail view for a single pipeline run."""
 
@@ -171,9 +195,13 @@ class RunDetailScreen(Screen):
     }
     """
 
+    REFRESH_INTERVAL = 3.0
+
     def __init__(self, run: RunInfo) -> None:
         super().__init__()
         self.run = run
+        self._file_pos: int = 0
+        self._current_events_path: Path | None = None
 
     def compose(self):
         yield Header(show_clock=True)
@@ -186,34 +214,48 @@ class RunDetailScreen(Screen):
 
     def on_mount(self) -> None:
         self._load_existing_events()
-        if self.run.status == RunStatus.RUNNING:
+        if self.run.status in (RunStatus.RUNNING, RunStatus.BLOCKED):
             self._tail_events()
+            self.set_interval(self.REFRESH_INTERVAL, self._refresh_run_info)
+
+    def _refresh_run_info(self) -> None:
+        """Re-read run state and update header + stage bar."""
+        project_dir: Path = self.app.project_dir  # type: ignore[attr-defined]
+        runs = discover_runs(project_dir)
+        for r in runs:
+            if r.issue_id == self.run.issue_id and r.source == self.run.source:
+                self.run = r
+                self.query_one("#run-header", RunHeader).update_run(r)
+                self.query_one("#stage-bar", StageProgressBar).update_run(r)
+                break
 
     def _load_existing_events(self) -> None:
-        """Load all existing events from events.jsonl."""
+        """Load all existing events from events.jsonl files."""
         log = self.query_one("#event-log", RichLog)
-        events_path = self.run.run_dir / "events.jsonl"
-        if not events_path.exists():
+        paths = _find_events_paths(self.run)
+
+        if not paths:
             log.write(Text("No events.jsonl found for this run.", style="dim"))
             return
 
-        self._file_pos = 0
-        try:
-            with open(events_path) as f:
-                for line in f:
-                    stripped = line.strip()
-                    if not stripped:
-                        continue
-                    try:
-                        ev = json.loads(stripped)
-                        formatted = _format_event(ev)
-                        if formatted:
-                            log.write(formatted)
-                    except json.JSONDecodeError:
-                        continue
-                self._file_pos = f.tell()
-        except OSError:
-            log.write(Text("Could not read events.jsonl", style="red"))
+        for events_path in paths:
+            try:
+                with open(events_path) as f:
+                    for line in f:
+                        stripped = line.strip()
+                        if not stripped:
+                            continue
+                        try:
+                            ev = json.loads(stripped)
+                            formatted = _format_event(ev)
+                            if formatted:
+                                log.write(formatted)
+                        except json.JSONDecodeError:
+                            continue
+                    self._file_pos = f.tell()
+                    self._current_events_path = events_path
+            except OSError:
+                continue
 
     @work(exclusive=True, group="tail")
     async def _tail_events(self) -> None:
@@ -221,12 +263,33 @@ class RunDetailScreen(Screen):
         import asyncio
 
         log = self.query_one("#event-log", RichLog)
-        events_path = self.run.run_dir / "events.jsonl"
 
         while True:
             await asyncio.sleep(0.5)
-            if not events_path.exists():
-                continue
+
+            # Check for worktree events.jsonl appearing
+            paths = _find_events_paths(self.run)
+            if paths:
+                latest_path = paths[-1]
+                if (
+                    self._current_events_path is not None
+                    and latest_path != self._current_events_path
+                ):
+                    # Switched to worktree — read from start of new file
+                    self._current_events_path = latest_path
+                    self._file_pos = 0
+
+            events_path = self._current_events_path
+            if events_path is None or not events_path.exists():
+                # No events file yet — check if canonical appeared
+                canonical = self.run.run_dir / "events.jsonl"
+                if canonical.exists():
+                    self._current_events_path = canonical
+                    self._file_pos = 0
+                    events_path = canonical
+                else:
+                    continue
+
             try:
                 with open(events_path) as f:
                     f.seek(self._file_pos)
@@ -242,6 +305,7 @@ class RunDetailScreen(Screen):
                         if formatted:
                             log.write(formatted)
                         if ev.get("type") == "pipeline_end":
+                            self._refresh_run_info()
                             return
                     except json.JSONDecodeError:
                         continue
