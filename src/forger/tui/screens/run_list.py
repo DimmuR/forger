@@ -26,6 +26,7 @@ class RunListScreen(Screen):
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("enter", "select_cursor", "Open", show=False),
         Binding("e", "open_run", "Open"),
+        Binding("n", "new_intake", "New"),
         Binding("r", "refresh_runs", "Refresh"),
         Binding("ctrl+q", "quit_app", "Quit"),
     ]
@@ -132,3 +133,22 @@ class RunListScreen(Screen):
     def action_refresh_runs(self) -> None:
         self._load_runs()
         self.notify("Refreshed")
+
+    def action_new_intake(self) -> None:
+        from forger.tui.intakes import discover_intakes
+        from forger.tui.screens.new_intake import IntakeRequest, NewIntakeModal
+
+        project_dir: Path = self.app.project_dir  # type: ignore[attr-defined]
+        intakes = discover_intakes(project_dir)
+        if not intakes:
+            self.notify("No intakes found", severity="warning")
+            return
+
+        def on_result(result: IntakeRequest | None) -> None:
+            if result is None:
+                return
+            label = result.params.get("issue_id", result.source)
+            self.notify(f"Starting {result.source} intake: {label}")
+            # TODO: spawn background subprocess (ticket #37)
+
+        self.app.push_screen(NewIntakeModal(intakes), on_result)
