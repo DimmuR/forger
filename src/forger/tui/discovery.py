@@ -202,7 +202,32 @@ def discover_runs(project_dir: Path) -> list[RunInfo]:
                 continue
 
             change_path = run_dir / "change.md"
+            source = source_dir.name
+
+            # Derive bare issue_id from directory name (run-<id> → <id>)
+            dir_name = run_dir.name
+            bare_id = dir_name[4:] if dir_name.startswith("run-") else dir_name
+
             if not change_path.exists():
+                # No change.md yet — visible only if lock held (intake in progress)
+                if not is_lock_held(bare_id, project_dir):
+                    continue
+
+                events_path = run_dir / "events.jsonl"
+                started_at, ended_at = _read_event_timestamps(events_path)
+                runs.append(
+                    RunInfo(
+                        issue_id=bare_id,
+                        source=source,
+                        stage="intake",
+                        status=RunStatus.RUNNING,
+                        title=bare_id,
+                        run_dir=run_dir,
+                        has_events=events_path.exists(),
+                        started_at=started_at,
+                        ended_at=ended_at,
+                    )
+                )
                 continue
 
             try:
