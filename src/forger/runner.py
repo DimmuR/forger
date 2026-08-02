@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from forger.config import ProjectConfig, RunnerTemplate
+from forger.events import EventEmitter
 
 # Characters that are safe in template variable values.
 # Blocks shell metacharacters: ; | & $ ` ( ) { } < > \ ! # ~ newline
@@ -64,6 +65,17 @@ def resolve_tools(stage: str, config: ProjectConfig) -> list[str]:
 def resolve_effort(stage: str, config: ProjectConfig) -> str | None:
     """Pick effort level for a stage from config, or None for default."""
     return config.effort.stages.get(stage, config.effort.default)
+
+
+def _tool_input_summary(tool_name: str, tool_input: dict[str, Any]) -> str:
+    """Produce a short summary string for a tool_use event."""
+    if tool_name in ("Read", "Write", "Edit"):
+        path: str = tool_input.get("file_path", "")
+        return path
+    if tool_name == "Bash":
+        cmd: str = tool_input.get("command", "")
+        return cmd.split("\n")[0][:120]
+    return tool_name
 
 
 _ACTIVITY_COOLDOWN = 5  # seconds — suppress file-op lines within this window
@@ -153,6 +165,7 @@ def invoke_runner(
     effort: str | None = None,
     timeout: int | None = None,
     log_file: Path | None = None,
+    event_emitter: EventEmitter | None = None,
 ) -> RunnerResult:
     """Render command template, execute via subprocess, return result."""
     timeout = timeout or template.timeout
@@ -248,16 +261,28 @@ def invoke_runner(
                             msg = event.get("message", {})
                             for block in msg.get("content", []):
                                 if block.get("type") == "tool_use":
+                                    tool_name = block.get("name", "")
+                                    tool_input = block.get("input", {})
                                     activity.feed(
-                                        block.get("name", ""),
-                                        block.get("input", {}),
+                                        tool_name,
+                                        tool_input,
                                         elapsed,
                                         now,
                                     )
+                                    if event_emitter:
+                                        event_emitter.emit(
+                                            "tool_use",
+                                            name=tool_name,
+                                            input_summary=_tool_input_summary(
+                                                tool_name, tool_input
+                                            ),
+                                        )
                                     last_heartbeat = now
 
                     if now - last_heartbeat >= 30:
                         activity.flush(elapsed)
+                        if event_emitter:
+                            event_emitter.emit("heartbeat", elapsed_seconds=elapsed)
                         print(f"  [{elapsed}s] runner alive...", flush=True)
                         last_heartbeat = now
 

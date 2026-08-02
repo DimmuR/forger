@@ -14,6 +14,7 @@ from pathlib import Path
 
 from forger import worktree
 from forger.config import ProjectConfig
+from forger.events import EventEmitter
 from forger.pipeline import artifacts_for, next_stage, post_state_for, pre_state_for
 from forger.prompt import render_prompt
 from forger.runner import (
@@ -129,6 +130,7 @@ class PipelineRunner:
         self.stages_executed = 0
         self.total_tokens = 0
         self.pipeline_start = time.monotonic()
+        self.events = EventEmitter(self.run_dir)
 
     def _outcome(
         self,
@@ -145,6 +147,11 @@ class PipelineRunner:
 
     def run(self) -> RunOutcome:
         """Main orchestration loop. Runs stages until blocked or terminal."""
+        self.events.emit(
+            "pipeline_start",
+            source=self.source,
+            issue_id=self.issue_id,
+        )
         self._setup_worktree()
         self._apply_gate_resolutions()
 
@@ -152,17 +159,31 @@ class PipelineRunner:
             for _ in range(MAX_STAGES):
                 result = self._resolve_and_dispatch()
                 if result is not None:
+                    self._emit_pipeline_end(result)
                     return result
 
             # Max stages reached
             state, _ = load_change(self.run_dir / "change.md")
-            return self._outcome(
+            outcome = self._outcome(
                 final_stage=state.pipeline.stage,
                 stages_executed=self.stages_executed,
                 blocked_reason="Max stage transitions reached",
             )
+            self._emit_pipeline_end(outcome)
+            return outcome
         finally:
             self._cleanup_worktree()
+            self.events.close()
+
+    def _emit_pipeline_end(self, outcome: RunOutcome) -> None:
+        elapsed = time.monotonic() - self.pipeline_start
+        self.events.emit(
+            "pipeline_end",
+            final_stage=outcome.final_stage,
+            total_tokens=self.total_tokens,
+            total_elapsed_seconds=int(elapsed),
+            blocked_reason=outcome.blocked_reason,
+        )
 
     def _elapsed_str(self) -> str:
         s = int(time.monotonic() - self.pipeline_start)
@@ -179,7 +200,9 @@ class PipelineRunner:
         if self.config.worktree and self.work_dir != self.repo_dir:
             worktree.recover_artifacts(self.work_dir, self.canonical_run_dir)
             worktree.remove(self.issue_id, self.repo_dir, self.config.branch_prefix)
+            self.events.emit("worktree", action="remove", path=str(self.work_dir))
             self.run_dir = self.canonical_run_dir
+            self.events.reattach(self.run_dir)
             print(
                 f"{self._elapsed_str()} Removed worktree: {self.work_dir}", flush=True
             )
@@ -191,6 +214,8 @@ class PipelineRunner:
             if wt_path:
                 self.work_dir = wt_path
                 self.run_dir = worktree.worktree_run_dir(wt_path)
+                self.events.reattach(self.run_dir)
+                self.events.emit("worktree", action="create", path=str(wt_path))
                 print(f"[0:00:00] Using existing worktree: {wt_path}", flush=True)
 
     def _apply_gate_resolutions(self) -> None:
@@ -235,6 +260,7 @@ class PipelineRunner:
         token_prefix = (
             f" {self._tokens_str(combined_tokens)}" if combined_tokens else ""
         )
+        self.events.emit("stage_start", name=display_name, model=model)
         print(
             f"{self._elapsed_str()}{token_prefix} [{display_name}] started (model={model})",
             flush=True,
@@ -249,10 +275,19 @@ class PipelineRunner:
             allowed_tools=allowed_tools,
             effort=effort,
             log_file=log_file,
+            event_emitter=self.events,
         )
         elapsed = int(time.monotonic() - start)
 
         if result.timed_out:
+            self.events.emit(
+                "stage_end",
+                name=display_name,
+                tokens=result.tokens,
+                elapsed_seconds=elapsed,
+                success=False,
+                error=f"Runner timed out at stage '{display_name}'",
+            )
             print(
                 f"{self._elapsed_str()} [{display_name}] timed out after {elapsed}s",
                 flush=True,
@@ -265,6 +300,17 @@ class PipelineRunner:
             )
 
         if result.exit_code != 0:
+            error_msg = (
+                f"Runner failed at stage '{display_name}' (exit {result.exit_code})"
+            )
+            self.events.emit(
+                "stage_end",
+                name=display_name,
+                tokens=result.tokens,
+                elapsed_seconds=elapsed,
+                success=False,
+                error=error_msg,
+            )
             print(
                 f"{self._elapsed_str()} [{display_name}] runner exited {result.exit_code} ({elapsed}s)",
                 flush=True,
@@ -273,9 +319,17 @@ class PipelineRunner:
                 tokens=result.tokens,
                 elapsed=elapsed,
                 failed=True,
-                blocked_reason=f"Runner failed at stage '{display_name}' (exit {result.exit_code})",
+                blocked_reason=error_msg,
             )
 
+        self.events.emit(
+            "stage_end",
+            name=display_name,
+            tokens=result.tokens,
+            elapsed_seconds=elapsed,
+            success=True,
+            error=None,
+        )
         return _StageResult(tokens=result.tokens, elapsed=elapsed)
 
     def _dispatch_stage(
@@ -350,6 +404,7 @@ class PipelineRunner:
         """Handle --skip flag. Returns True if stage was skipped."""
         if not (self.skip_stages and stage_name in self.skip_stages):
             return False
+        self.events.emit("skip", name=stage_name)
         print(f"{self._elapsed_str()} [{stage_name}] skipped", flush=True)
         post = post_state_for(stage_name)
         if post and change_path.exists():
@@ -374,6 +429,8 @@ class PipelineRunner:
             self.config.branch_prefix,
         )
         self.run_dir = worktree.relocate_run_dir(self.canonical_run_dir, self.work_dir)
+        self.events.reattach(self.run_dir)
+        self.events.emit("worktree", action="create", path=str(self.work_dir))
         print(f"{self._elapsed_str()} Created worktree: {self.work_dir}", flush=True)
 
     def _verify_and_report(
@@ -389,11 +446,18 @@ class PipelineRunner:
         if not advanced:
             reason = f"Stage '{stage_name}' did not advance"
             final_stage = "unknown"
+            gate = None
             if change_path.exists():
                 state, _ = load_change(change_path)
                 final_stage = state.pipeline.stage
                 if state.pipeline.parked_reason:
                     reason = f"Parked: {state.pipeline.parked_reason}"
+                # Detect unresolved gate
+                for gname, gval in state.gates.items():
+                    if gval.required and gval.resolved is None:
+                        gate = gname
+                        break
+            self.events.emit("blocked", reason=reason, gate=gate)
             print(
                 f"{self._elapsed_str()} [{stage_name}] blocked — {reason}", flush=True
             )
@@ -444,6 +508,7 @@ class PipelineRunner:
             blocked = None
             if state and state.pipeline.parked_reason:
                 blocked = f"Parked: {state.pipeline.parked_reason}"
+                self.events.emit("blocked", reason=blocked, gate=None)
             return self._outcome(
                 final_stage=state.pipeline.stage if state else "none",
                 stages_executed=self.stages_executed,
