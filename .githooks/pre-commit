@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -e
+
+VENV="$(git rev-parse --show-toplevel)/.venv"
+
+if [ ! -f "$VENV/bin/python" ]; then
+    echo "ERROR: .venv not found. Run: uv sync"
+    exit 1
+fi
+
+echo "==> ruff format --check"
+"$VENV/bin/ruff" format --check src/ tests/
+
+echo "==> ruff check"
+"$VENV/bin/ruff" check src/ tests/
+
+echo "==> pyright"
+"$VENV/bin/python" -m pyright src/
+
+echo "==> pytest"
+unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE
+"$VENV/bin/python" -m pytest tests/ -x -q
