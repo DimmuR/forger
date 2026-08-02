@@ -35,6 +35,10 @@ Changelog = "https://github.com/DimmuR/forger/blob/master/CHANGELOG.md"
 
 [project.scripts]
 forger = "forger.cli:app"
+forger-tui = "forger.tui.app:run"
+
+[project.optional-dependencies]
+tui = ["textual>=1.0"]
 
 [build-system]
 requires = ["hatchling"]
@@ -54,6 +58,7 @@ dev = [
     "pytest-tmp-files>=0.0.2",
     "pyright>=1.1",
     "ruff>=0.5",
+    "textual>=1.0",
     "types-pyyaml>=6.0.12.20260724",
 ]
 
