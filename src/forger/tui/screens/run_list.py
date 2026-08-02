@@ -199,8 +199,10 @@ class RunListScreen(Screen):
 
     def _open_detail(self, row_index: int) -> None:
         if 0 <= row_index < len(self._runs):
+            from forger.tui.screens.run_detail import RunDetailScreen
+
             run = self._runs[row_index]
-            self.notify(f"Detail view for {run.issue_id} (coming in #15)")
+            self.app.push_screen(RunDetailScreen(run))
 
     def action_quit_app(self) -> None:
         self.app.exit()
