@@ -130,7 +130,9 @@ class NewIntakeModal(ModalScreen[IntakeRequest | None]):
             widgets.extend(self._make_param_widgets(param))
         container.mount_all(widgets)
 
-    def _make_param_widgets(self, param: IntakeParam) -> list[Label | Input | Select | Switch]:
+    def _make_param_widgets(
+        self, param: IntakeParam
+    ) -> list[Label | Input | Select | Switch]:
         suffix = " *" if param.required else ""
         label = Label(f"{param.label}{suffix}", classes="param-label")
 

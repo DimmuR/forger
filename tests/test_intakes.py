@@ -135,10 +135,7 @@ class TestDiscoverIntakes:
     def test_label_fallback_to_source_title(self, tmp_path: Path):
         _write_intake_ui(
             tmp_path / ".forger" / "stages" / "nolabel_intake",
-            "params:\n"
-            "  - key: id\n"
-            '    label: "ID"\n'
-            "    type: text\n",
+            'params:\n  - key: id\n    label: "ID"\n    type: text\n',
         )
         intakes = discover_intakes(tmp_path)
         nolabel = next(i for i in intakes if i.source == "nolabel")
