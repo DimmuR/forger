@@ -8,26 +8,8 @@ from rich.text import Text
 from textual.widgets import Static
 
 from forger.pipeline import STAGES
+from forger.tui.constants import STAGE_SHORT, format_seconds
 from forger.tui.discovery import RunInfo, RunStatus
-
-STAGE_SHORT: dict[str, str] = {
-    "sentry_intake": "intake",
-    "analyze": "analyze",
-    "prove": "prove",
-    "fix_options": "fix_opts",
-    "implement": "impl",
-    "review": "review",
-    "draft": "draft",
-    "push": "push",
-}
-
-
-def _fmt_secs(s: int) -> str:
-    if s >= 3600:
-        return f"{s // 3600}:{(s % 3600) // 60:02d}:{s % 60:02d}"
-    if s >= 60:
-        return f"{s // 60}:{s % 60:02d}"
-    return f"{s}s"
 
 
 class StageProgressBar(Static):
@@ -56,7 +38,7 @@ class StageProgressBar(Static):
             elapsed = self.stage_times.get(spec.name)
             label = f" {short} "
             if elapsed is not None:
-                label = f" {short} ({_fmt_secs(elapsed)}) "
+                label = f" {short} ({format_seconds(elapsed)}) "
 
             if i > 0:
                 parts.append(" → ", style="dim")

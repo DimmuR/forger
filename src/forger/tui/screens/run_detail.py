@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
 
@@ -10,11 +12,16 @@ from rich.text import Text
 from textual import work
 from textual.binding import Binding, BindingType
 from textual.screen import Screen
-from textual.widgets import Footer, Header, RichLog
+from textual.widgets import Footer, Header, Label, RichLog
 
-from forger.tui.discovery import RunInfo, RunStatus, discover_runs
+from forger import worktree
+from forger.pipeline import STAGE_BY_NAME
+from forger.tui.constants import format_tokens
+from forger.tui.discovery import RunInfo, RunStatus, _parse_ts, discover_runs
 from forger.tui.widgets.run_header import RunHeader
 from forger.tui.widgets.stage_bar import StageProgressBar
+
+_ACTIVE_STATUSES = (RunStatus.RUNNING, RunStatus.BLOCKED)
 
 TOOL_ICONS: dict[str, tuple[str, str]] = {
     "Read": ("[R]", "bold cyan"),
@@ -64,7 +71,7 @@ def _format_stage_end(ev: dict) -> Text:
     t.append(f"[{short_ts}] ", style="bold dim")
 
     success: bool = ev.get("success", True)
-    token_str = f"{tokens / 1000:.1f}k" if tokens >= 1000 else str(tokens)
+    token_str = format_tokens(tokens)
     t.append(f"{token_str} ", style="green" if success else "red")
     t.append(f"[{name}] ", style="bold")
     if success:
@@ -103,9 +110,7 @@ def _format_pipeline_event(ev: dict) -> Text:
         final: str = ev.get("final_stage", "")
         total_tokens: int = ev.get("total_tokens", 0)
         total_elapsed: int = ev.get("total_elapsed_seconds", 0)
-        token_str = (
-            f"{total_tokens / 1000:.1f}k" if total_tokens >= 1000 else str(total_tokens)
-        )
+        token_str = format_tokens(total_tokens)
         t.append(f"[{short_ts}] ", style="bold dim")
         blocked: str | None = ev.get("blocked_reason")
         if blocked:
@@ -158,8 +163,6 @@ def _find_events_paths(run: RunInfo, project_dir: Path) -> list[Path]:
     if canonical.exists():
         paths.append(canonical)
 
-    from forger import worktree
-
     wt_path = worktree.path_for(run.issue_id, project_dir)
     if wt_path:
         wt_events = worktree.worktree_run_dir(wt_path) / "events.jsonl"
@@ -178,32 +181,6 @@ class RunDetailScreen(Screen):
         Binding("ctrl+q", "quit_app", "Quit"),
     ]
 
-    CSS = """
-    RunDetailScreen {
-        layout: vertical;
-    }
-
-    #run-header {
-        height: 4;
-        padding: 1 2;
-        background: $surface;
-        border-bottom: solid $primary-lighten-2;
-    }
-
-    #stage-bar {
-        height: 4;
-        padding: 1 2;
-        background: $surface-darken-1;
-        border-bottom: solid $primary-lighten-3;
-    }
-
-    #event-log {
-        height: 1fr;
-        padding: 0 1;
-        scrollbar-size: 1 1;
-    }
-    """
-
     REFRESH_INTERVAL = 3.0
 
     def __init__(self, run: RunInfo) -> None:
@@ -214,6 +191,7 @@ class RunDetailScreen(Screen):
         self._live_stage: str | None = None
         self._stage_times: dict[str, int] = {}
         self._stage_start_ts: dict[str, str] = {}
+        self._run_gone: bool = False
 
     @property
     def _project_dir(self) -> Path:
@@ -226,23 +204,44 @@ class RunDetailScreen(Screen):
         yield RichLog(
             id="event-log", highlight=True, markup=False, wrap=True, max_lines=5000
         )
+        yield Label(
+            "Run directory no longer exists. Press q to go back.",
+            id="run-gone",
+        )
         yield Footer()
 
     def on_mount(self) -> None:
+        self.query_one("#run-gone").display = False
         self._load_existing_events()
-        if self.run.status in (RunStatus.RUNNING, RunStatus.BLOCKED):
+        if self.run.status in _ACTIVE_STATUSES:
             self._tail_events()
             self.set_interval(self.REFRESH_INTERVAL, self._refresh_run_info)
 
     def _refresh_run_info(self) -> None:
         """Re-read run state and update header + stage bar."""
+        if not self.run.run_dir.exists():
+            self._show_run_gone()
+            return
         project_dir: Path = self.app.project_dir  # type: ignore[attr-defined]
         runs = discover_runs(project_dir)
         for r in runs:
             if r.issue_id == self.run.issue_id and r.source == self.run.source:
                 self.run = r
                 break
+        else:
+            self._show_run_gone()
+            return
         self._update_widgets()
+
+    def _show_run_gone(self) -> None:
+        if self._run_gone:
+            return
+        self._run_gone = True
+        self.query_one("#run-header").display = False
+        self.query_one("#stage-bar").display = False
+        self.query_one("#event-log").display = False
+        self.query_one("#run-gone").display = True
+        self.notify("Run directory was removed", severity="warning")
 
     def _track_event(self, ev: dict) -> None:
         """Track stage transitions and timings from events."""
@@ -257,8 +256,6 @@ class RunDetailScreen(Screen):
             self._stage_start_ts[name] = ev.get("ts", "")
             self._stage_times.pop(name, None)
         elif event_type == "stage_end":
-            from forger.pipeline import STAGE_BY_NAME
-
             name = ev.get("name", "")
             elapsed: int = ev.get("elapsed_seconds", 0)
             if elapsed:
@@ -271,8 +268,6 @@ class RunDetailScreen(Screen):
         """Update header and stage bar, preferring live stage over change.md."""
         run = self.run
         if self._live_stage and self._live_stage != run.stage:
-            from dataclasses import replace
-
             run = replace(run, stage=self._live_stage)
         self.query_one("#run-header", RunHeader).update_run(run)
 
@@ -280,12 +275,8 @@ class RunDetailScreen(Screen):
         if self._live_stage and self._live_stage not in times:
             ts_raw = self._stage_start_ts.get(self._live_stage, "")
             if ts_raw:
-                from forger.tui.discovery import _parse_ts
-
                 started = _parse_ts(ts_raw)
                 if started:
-                    from datetime import UTC, datetime
-
                     elapsed = int((datetime.now(UTC) - started).total_seconds())
                     if elapsed >= 0:
                         times[self._live_stage] = elapsed
@@ -331,8 +322,12 @@ class RunDetailScreen(Screen):
 
         log = self.query_one("#event-log", RichLog)
 
-        while True:
+        while not self._run_gone:
             await asyncio.sleep(0.5)
+
+            if not self.run.run_dir.exists():
+                self._show_run_gone()
+                return
 
             # Check for worktree events.jsonl appearing
             paths = _find_events_paths(self.run, self._project_dir)

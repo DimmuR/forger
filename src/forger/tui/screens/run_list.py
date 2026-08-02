@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from pathlib import Path
 from typing import ClassVar
 
 from rich.text import Text
@@ -11,102 +11,24 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, Label
 from textual.widgets.data_table import RowKey
 
-from forger.pipeline import STAGES
+from forger.tui.constants import (
+    STATUS_STYLES,
+    format_elapsed,
+    format_started,
+    stage_label,
+)
 from forger.tui.discovery import RunInfo, RunStatus, discover_runs
-
-STAGE_SHORT: dict[str, str] = {
-    "sentry_intake": "intake",
-    "analyze": "analyze",
-    "prove": "prove",
-    "fix_options": "fix_opts",
-    "implement": "impl",
-    "review": "review",
-    "draft": "draft",
-    "push": "push",
-}
-
-STATUS_STYLES: dict[RunStatus, str] = {
-    RunStatus.RUNNING: "cyan",
-    RunStatus.COMPLETED: "green",
-    RunStatus.CRASHED: "red",
-    RunStatus.BLOCKED: "yellow",
-    RunStatus.NEEDS_ATTENTION: "dark_orange",
-}
-
-
-def _format_elapsed(started: datetime | None, ended: datetime | None) -> str:
-    """Format elapsed time as H:MM:SS or M:SS."""
-    if started is None:
-        return "—"
-    end = ended or datetime.now(UTC)
-    delta = end - started
-    total_secs = int(delta.total_seconds())
-    if total_secs < 0:
-        return "—"
-    hours, remainder = divmod(total_secs, 3600)
-    mins, secs = divmod(remainder, 60)
-    if hours:
-        return f"{hours}:{mins:02d}:{secs:02d}"
-    return f"{mins}:{secs:02d}"
-
-
-def _format_started(started: datetime | None) -> str:
-    """Format start time as local HH:MM or date+time if not today."""
-    if started is None:
-        return "—"
-    local = started.astimezone()
-    today = datetime.now().date()
-    if local.date() == today:
-        return local.strftime("%H:%M")
-    return local.strftime("%m-%d %H:%M")
-
-
-def _stage_label(stage: str) -> str:
-    """Map pipeline state to short display name."""
-    for spec in STAGES:
-        if spec.post_state == stage:
-            return STAGE_SHORT.get(spec.name, spec.name)
-        if spec.pre_state == stage:
-            return STAGE_SHORT.get(spec.name, spec.name)
-    return stage
 
 
 class RunListScreen(Screen):
     """Home screen: DataTable of all discovered runs."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("enter", "select_cursor", "Preview", show=False),
-        Binding("e", "open_run", "Preview"),
-        Binding("ctrl+q", "quit_app", "Quit"),
+        Binding("enter", "select_cursor", "Open", show=False),
+        Binding("e", "open_run", "Open"),
         Binding("r", "refresh_runs", "Refresh"),
+        Binding("ctrl+q", "quit_app", "Quit"),
     ]
-
-    CSS = """
-    RunListScreen {
-        layout: vertical;
-    }
-
-    #title-bar {
-        height: 5;
-        width: 100%;
-        content-align: center middle;
-        padding: 1 0;
-        border: solid $primary-lighten-2;
-        color: $text;
-        text-style: bold;
-    }
-
-    #run-table {
-        height: 1fr;
-        width: 100%;
-    }
-
-    #empty-message {
-        content-align: center middle;
-        height: 1fr;
-        color: $text-muted;
-    }
-    """
 
     REFRESH_INTERVAL = 3.0
 
@@ -117,7 +39,7 @@ class RunListScreen(Screen):
 
     def compose(self):
         yield Header(show_clock=True)
-        yield Label(" FORGER — Pipeline Dashboard", id="title-bar")
+        yield Label("FORGER — Pipeline Dashboard", id="title-bar")
         yield DataTable(id="run-table", cursor_type="row")
         yield Label(
             "No runs found. Start a pipeline with: forger run sentry <issue-id>",
@@ -138,8 +60,6 @@ class RunListScreen(Screen):
         self.set_interval(self.REFRESH_INTERVAL, self._load_runs)
 
     def _load_runs(self) -> None:
-        from pathlib import Path
-
         project_dir: Path = self.app.project_dir  # type: ignore[attr-defined]
         runs = discover_runs(project_dir)
         self._update_table(runs)
@@ -169,12 +89,14 @@ class RunListScreen(Screen):
                 style=STATUS_STYLES.get(run.status, ""),
             )
             stage_text = Text(
-                _stage_label(run.stage),
+                stage_label(run.stage),
                 style="bold" if run.status == RunStatus.RUNNING else "",
             )
-            started = _format_started(run.started_at)
-            elapsed = _format_elapsed(run.started_at, run.ended_at)
-            title_truncated = run.title[:60] if len(run.title) > 60 else run.title
+            started = format_started(run.started_at)
+            elapsed = format_elapsed(run.started_at, run.ended_at)
+            title_truncated = (
+                run.title[:57] + "..." if len(run.title) > 60 else run.title
+            )
             key = table.add_row(
                 run.issue_id,
                 run.source,

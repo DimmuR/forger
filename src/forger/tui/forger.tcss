@@ -1,3 +1,64 @@
+/* ── Global ─────────────────────────────────────────────── */
+
 Screen {
     background: $surface;
+}
+
+/* ── Run List Screen ───────────────────────────────────── */
+
+RunListScreen {
+    layout: vertical;
+}
+
+RunListScreen #title-bar {
+    height: 3;
+    width: 100%;
+    content-align: center middle;
+    padding: 0 2;
+    background: $primary-darken-3;
+    color: $text;
+    text-style: bold;
+}
+
+RunListScreen #run-table {
+    height: 1fr;
+    width: 100%;
+}
+
+RunListScreen #empty-message {
+    content-align: center middle;
+    height: 1fr;
+    color: $text-muted;
+}
+
+/* ── Run Detail Screen ─────────────────────────────────── */
+
+RunDetailScreen {
+    layout: vertical;
+}
+
+RunDetailScreen #run-header {
+    height: 3;
+    padding: 0 2;
+    background: $surface;
+    border-bottom: solid $primary-lighten-3;
+}
+
+RunDetailScreen #stage-bar {
+    height: 3;
+    padding: 0 2;
+    background: $surface-darken-1;
+    border-bottom: solid $primary-lighten-3;
+}
+
+RunDetailScreen #event-log {
+    height: 1fr;
+    padding: 0 1;
+    scrollbar-size: 1 1;
+}
+
+RunDetailScreen #run-gone {
+    content-align: center middle;
+    height: 1fr;
+    color: $text-muted;
 }
