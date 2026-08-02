@@ -30,6 +30,11 @@ class ToolsConfig(BaseModel):
     stages: dict[str, list[str]] = {}
 
 
+class EffortConfig(BaseModel):
+    default: str | None = None
+    stages: dict[str, str] = {}
+
+
 class ModelConfig(BaseModel):
     default: str = "sonnet"
     stages: dict[str, str] = {}
@@ -49,6 +54,7 @@ class ReviewConfig(BaseModel):
 
 class ProjectConfig(BaseModel):
     models: ModelConfig = ModelConfig()
+    effort: EffortConfig = EffortConfig()
     tools: ToolsConfig = ToolsConfig()
     runners: dict[str, RunnerTemplate] = {}
     default_runner: str = "claude"
@@ -105,7 +111,7 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
     },
     "runners": {
         "claude": {
-            "command": "claude -p {prompt_arg} --model {model} --allowedTools {allowed_tools} --output-format json --verbose",
+            "command": "claude -p {prompt_arg} --model {model} --allowedTools {allowed_tools} --output-format stream-json --verbose{effort}",
             "env": {"CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "0"},
             "timeout": 900,
         },

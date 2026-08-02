@@ -69,9 +69,9 @@ def _build_context_block(
     commands = config.resolve_commands(state.pipeline.stack)
     if commands:
         lines.append("")
-        lines.append("### Project commands")
+        lines.append("### Project commands (use these, do not discover alternatives)")
         for name, cmd in commands.items():
-            lines.append(f"- {name}: `{cmd}`")
+            lines.append(f"- **{name}**: `{cmd}`")
 
     if state.evidence:
         lines.append("")

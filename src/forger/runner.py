@@ -11,6 +11,7 @@ here to block shell metacharacter injection from programmatic callers.
 __all__ = [
     "RunnerResult",
     "invoke_runner",
+    "resolve_effort",
     "resolve_model",
     "resolve_runner",
     "resolve_tools",
@@ -27,6 +28,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from forger.config import ProjectConfig, RunnerTemplate
 
@@ -59,12 +61,96 @@ def resolve_tools(stage: str, config: ProjectConfig) -> list[str]:
     return config.tools.stages.get(stage, config.tools.default)
 
 
+def resolve_effort(stage: str, config: ProjectConfig) -> str | None:
+    """Pick effort level for a stage from config, or None for default."""
+    return config.effort.stages.get(stage, config.effort.default)
+
+
+_ACTIVITY_COOLDOWN = 5  # seconds — suppress file-op lines within this window
+
+
+class _ActivityTracker:
+    """Collapse rapid file operations, always show Bash commands."""
+
+    def __init__(self) -> None:
+        self._pending_reads: list[str] = []
+        self._pending_writes: list[str] = []
+        self._last_print: float = 0
+
+    def _flush_pending(self, elapsed: int) -> None:
+        if self._pending_reads:
+            n = len(self._pending_reads)
+            if n <= 2:
+                detail = ", ".join(self._pending_reads)
+            else:
+                detail = f"{self._pending_reads[0]} +{n - 1} more"
+            print(f"  [{elapsed}s] Read {detail}", flush=True)
+            self._pending_reads.clear()
+        if self._pending_writes:
+            detail = ", ".join(self._pending_writes)
+            print(f"  [{elapsed}s] Write/Edit {detail}", flush=True)
+            self._pending_writes.clear()
+
+    def feed(self, tool_name: str, tool_input: dict, elapsed: int, now: float) -> None:
+        if tool_name == "Read":
+            path = tool_input.get("file_path", "")
+            self._pending_reads.append(Path(path).name if path else "?")
+            if now - self._last_print >= _ACTIVITY_COOLDOWN:
+                self._flush_pending(elapsed)
+                self._last_print = now
+            return
+
+        # Write/Edit — batch together
+        if tool_name in ("Write", "Edit"):
+            path = tool_input.get("file_path", "")
+            name = Path(path).name if path else "?"
+            tag = f"{tool_name} {name}"
+            self._pending_writes.append(tag)
+            if now - self._last_print >= _ACTIVITY_COOLDOWN:
+                self._flush_pending(elapsed)
+                self._last_print = now
+            return
+
+        # Bash — always print immediately (these are the slow/interesting ops)
+        self._flush_pending(elapsed)
+        if tool_name == "Bash":
+            cmd = tool_input.get("command", "")
+            short = cmd.split("\n")[0][:80]
+            if short:
+                print(f"  [{elapsed}s] Bash: {short}", flush=True)
+                self._last_print = now
+            return
+
+        # Other tools — print name
+        self._flush_pending(elapsed)
+        print(f"  [{elapsed}s] {tool_name}", flush=True)
+        self._last_print = now
+
+    def flush(self, elapsed: int) -> None:
+        self._flush_pending(elapsed)
+
+
+def _parse_stream_line(line: str) -> dict[str, Any] | None:
+    """Parse one stream-json line, return dict or None."""
+    stripped = line.strip()
+    if not stripped:
+        return None
+    try:
+        data = json.loads(stripped)
+        if isinstance(data, dict):
+            return data  # type: ignore[no-any-return]
+        return None
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
 def invoke_runner(
     template: RunnerTemplate,
     prompt: str,
     workdir: Path,
     model: str,
     allowed_tools: list[str] | None = None,
+    effort: str | None = None,
     timeout: int | None = None,
     log_file: Path | None = None,
 ) -> RunnerResult:
@@ -80,12 +166,14 @@ def invoke_runner(
 
     try:
         tools_str = ",".join(allowed_tools) if allowed_tools else ""
+        effort_str = f" --effort {effort}" if effort else ""
         # Validate all interpolated values to prevent shell injection.
         substitutions = {
             "model": model,
             "prompt_arg": prompt_file,
             "workdir": str(workdir),
             "allowed_tools": tools_str,
+            "effort": effort_str,
         }
         for name, value in substitutions.items():
             if value and not _SAFE_VALUE_RE.match(value):
@@ -136,9 +224,11 @@ def invoke_runner(
         watchdog = threading.Thread(target=_watchdog, daemon=True)
         watchdog.start()
 
-        # Stream stdout line-by-line
+        # Stream stdout line-by-line, extracting progress from stream-json
         stdout_lines: list[str] = []
         last_heartbeat = start
+        result_data: dict | None = None
+        activity = _ActivityTracker()
         with contextlib.ExitStack() as stack:
             log_fh = stack.enter_context(open(log_file, "a")) if log_file else None
             try:
@@ -147,10 +237,31 @@ def invoke_runner(
                     if log_fh:
                         log_fh.write(line)
                     now = time.monotonic()
+                    elapsed = int(now - start)
+
+                    event = _parse_stream_line(line)
+                    if event:
+                        etype = event.get("type")
+                        if etype == "result":
+                            result_data = event
+                        elif etype == "assistant":
+                            msg = event.get("message", {})
+                            for block in msg.get("content", []):
+                                if block.get("type") == "tool_use":
+                                    activity.feed(
+                                        block.get("name", ""),
+                                        block.get("input", {}),
+                                        elapsed,
+                                        now,
+                                    )
+                                    last_heartbeat = now
+
                     if now - last_heartbeat >= 30:
-                        elapsed = int(now - start)
+                        activity.flush(elapsed)
                         print(f"  [{elapsed}s] runner alive...", flush=True)
                         last_heartbeat = now
+
+                activity.flush(int(time.monotonic() - start))
             finally:
                 proc.wait()
                 cancel_watchdog.set()
@@ -166,18 +277,28 @@ def invoke_runner(
         else:
             exit_code = proc.returncode
 
-            # Parse JSON output for token usage
+            # Extract token usage from stream-json result event
             tokens = 0
             log_content = full_stdout
-            try:
-                data = json.loads(full_stdout)
-                usage = data.get("usage", {})
+            if result_data:
+                usage = result_data.get("usage", {})
                 tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
-                log_content = data.get("result", full_stdout)
-                if data.get("is_error"):
+                log_content = result_data.get("result", full_stdout)
+                if result_data.get("is_error"):
                     exit_code = exit_code or 1
-            except (json.JSONDecodeError, TypeError, AttributeError):
-                log_content = full_stdout
+            else:
+                # Fallback: try legacy single-JSON parse
+                try:
+                    data = json.loads(full_stdout)
+                    usage = data.get("usage", {})
+                    tokens = usage.get("input_tokens", 0) + usage.get(
+                        "output_tokens", 0
+                    )
+                    log_content = data.get("result", full_stdout)
+                    if data.get("is_error"):
+                        exit_code = exit_code or 1
+                except (json.JSONDecodeError, TypeError, AttributeError):
+                    log_content = full_stdout
 
         # Write summary to log (output lines already streamed above)
         if log_file:

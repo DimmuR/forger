@@ -16,7 +16,13 @@ from forger import worktree
 from forger.config import ProjectConfig
 from forger.pipeline import artifacts_for, next_stage, post_state_for, pre_state_for
 from forger.prompt import render_prompt
-from forger.runner import invoke_runner, resolve_model, resolve_runner, resolve_tools
+from forger.runner import (
+    invoke_runner,
+    resolve_effort,
+    resolve_model,
+    resolve_runner,
+    resolve_tools,
+)
 from forger.stages import StageDef, load_verify, resolve_stage
 from forger.state import (
     TERMINAL_STAGES,
@@ -204,6 +210,7 @@ class PipelineRunner:
         model: str,
         runner_template,
         allowed_tools: list[str] | None,
+        effort: str | None = None,
         prompt_path: Path | None = None,
         log_name: str | None = None,
         token_offset: int = 0,
@@ -240,6 +247,7 @@ class PipelineRunner:
             self.work_dir,
             model,
             allowed_tools=allowed_tools,
+            effort=effort,
             log_file=log_file,
         )
         elapsed = int(time.monotonic() - start)
@@ -287,8 +295,9 @@ class PipelineRunner:
         model = resolve_model(stage_name, self.config)
         runner = resolve_runner(self.config)
         allowed_tools = resolve_tools(stage_name, self.config)
+        effort = resolve_effort(stage_name, self.config)
         return self._invoke_stage(
-            stage_name, stage_def, state, model, runner, allowed_tools
+            stage_name, stage_def, state, model, runner, allowed_tools, effort=effort
         )
 
     def _dispatch_review(
@@ -309,6 +318,7 @@ class PipelineRunner:
             model = reviewer.model or resolve_model("review", self.config)
             runner = self.config.runners[reviewer.runner or self.config.default_runner]
             allowed_tools = resolve_tools("review", self.config)
+            effort = resolve_effort("review", self.config)
 
             result = self._invoke_stage(
                 "review",
@@ -317,6 +327,7 @@ class PipelineRunner:
                 model,
                 runner,
                 allowed_tools,
+                effort=effort,
                 prompt_path=role_prompt_path,
                 log_name=f"review/{reviewer.role}",
                 token_offset=stage_tokens,
