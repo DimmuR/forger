@@ -70,6 +70,7 @@ class RunListScreen(Screen):
 
     #run-table {
         height: 1fr;
+        width: 100%;
     }
 
     #empty-message {
@@ -98,13 +99,11 @@ class RunListScreen(Screen):
 
     def on_mount(self) -> None:
         table = self.query_one("#run-table", DataTable)
-        table.add_columns(
-            "Issue ID",
-            "Source",
-            "Stage",
-            "Status",
-            "Title",
-        )
+        table.add_column("Issue ID", width=20)
+        table.add_column("Source", width=10)
+        table.add_column("Stage", width=12)
+        table.add_column("Status", width=18)
+        table.add_column("Title")
         self._load_runs()
         self.set_interval(self.REFRESH_INTERVAL, self._load_runs)
 
