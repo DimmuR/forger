@@ -240,6 +240,22 @@ def archive(run_id: str):
 
 
 @app.command(
+    help="Launch interactive TUI dashboard.",
+    epilog="Examples:\n  forger tui",
+)
+def tui():
+    """Launch interactive TUI dashboard."""
+    try:
+        from forger.tui.app import ForgerTUI
+    except ImportError as e:
+        typer.echo(
+            "Error: textual not installed. Run: pip install forger[tui]", err=True
+        )
+        raise typer.Exit(1) from e
+    ForgerTUI(project_dir=_repo_dir()).run()
+
+
+@app.command(
     help="Initialize forger in current project.",
     epilog="Examples:\n  forger init",
 )
