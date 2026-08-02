@@ -27,6 +27,7 @@ class RunListScreen(Screen):
         Binding("enter", "select_cursor", "Open", show=False),
         Binding("e", "open_run", "Open"),
         Binding("n", "new_intake", "New"),
+        Binding("d", "archive_run", "Archive"),
         Binding("r", "refresh_runs", "Refresh"),
         Binding("ctrl+q", "quit_app", "Quit"),
     ]
@@ -133,6 +134,38 @@ class RunListScreen(Screen):
     def action_refresh_runs(self) -> None:
         self._load_runs()
         self.notify("Refreshed")
+
+    def action_archive_run(self) -> None:
+        from forger.tui.screens.confirm_archive import ConfirmArchiveModal
+
+        table = self.query_one("#run-table", DataTable)
+        if table.cursor_row is None or not self._runs:
+            return
+        idx = table.cursor_row
+        if idx < 0 or idx >= len(self._runs):
+            return
+        run = self._runs[idx]
+
+        if run.status == RunStatus.RUNNING:
+            self.notify("Cannot archive a running job", severity="warning")
+            return
+
+        def on_confirm(confirmed: bool | None) -> None:
+            if not confirmed:
+                return
+            source_dir = run.run_dir.parent
+            archive_dir = source_dir / "archive"
+            archive_dir.mkdir(exist_ok=True)
+            dest = archive_dir / run.run_dir.name
+            try:
+                run.run_dir.rename(dest)
+            except OSError as exc:
+                self.notify(f"Archive failed: {exc}", severity="error")
+                return
+            self.notify(f"Archived {run.issue_id}")
+            self._load_runs()
+
+        self.app.push_screen(ConfirmArchiveModal(run.issue_id), on_confirm)
 
     def action_new_intake(self) -> None:
         from forger.tui.intakes import discover_intakes
