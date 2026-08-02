@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 
+from forger import worktree
 from forger.pipeline import STAGES
 from forger.state import TERMINAL_STAGES, load_change
 
@@ -46,7 +47,7 @@ class RunInfo:
     def stage_index(self) -> int:
         """0-based index of current stage in pipeline, -1 if unknown."""
         for i, spec in enumerate(STAGES):
-            if spec.post_state == self.stage or spec.pre_state == self.stage:
+            if self.stage in (spec.name, spec.post_state, spec.pre_state):
                 return i
         return -1
 
@@ -215,12 +216,27 @@ def discover_runs(project_dir: Path) -> list[RunInfo]:
             if issue_id.startswith(f"{state.origin}-"):
                 bare_id = issue_id[len(state.origin) + 1 :]
 
+            # Prefer worktree change.md if worktree is active
+            wt_path = worktree.path_for(bare_id, project_dir)
+            if wt_path:
+                wt_change = worktree.worktree_run_dir(wt_path) / "change.md"
+                if wt_change.exists():
+                    import contextlib
+
+                    with contextlib.suppress(Exception):
+                        state, _ = load_change(wt_change)
+
             lock_held = is_lock_held(bare_id, project_dir)
             status = _determine_status(
                 state.pipeline.stage, state.pipeline.parked_reason, lock_held
             )
 
+            # Check both canonical and worktree for events
             events_path = run_dir / "events.jsonl"
+            if wt_path:
+                wt_events = worktree.worktree_run_dir(wt_path) / "events.jsonl"
+                if wt_events.exists():
+                    events_path = wt_events
             started_at, ended_at = _read_event_timestamps(events_path)
 
             runs.append(
@@ -232,7 +248,8 @@ def discover_runs(project_dir: Path) -> list[RunInfo]:
                     title=state.title,
                     run_dir=run_dir,
                     parked_reason=state.pipeline.parked_reason,
-                    has_events=events_path.exists(),
+                    has_events=events_path.exists()
+                    or (run_dir / "events.jsonl").exists(),
                     started_at=started_at,
                     ended_at=ended_at,
                 )
