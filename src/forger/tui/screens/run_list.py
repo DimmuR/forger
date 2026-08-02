@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import ClassVar
 
 from rich.text import Text
@@ -31,6 +32,33 @@ STATUS_STYLES: dict[RunStatus, str] = {
     RunStatus.BLOCKED: "yellow",
     RunStatus.NEEDS_ATTENTION: "dark_orange",
 }
+
+
+def _format_elapsed(started: datetime | None, ended: datetime | None) -> str:
+    """Format elapsed time as H:MM:SS or M:SS."""
+    if started is None:
+        return "—"
+    end = ended or datetime.now(UTC)
+    delta = end - started
+    total_secs = int(delta.total_seconds())
+    if total_secs < 0:
+        return "—"
+    hours, remainder = divmod(total_secs, 3600)
+    mins, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{mins:02d}:{secs:02d}"
+    return f"{mins}:{secs:02d}"
+
+
+def _format_started(started: datetime | None) -> str:
+    """Format start time as local HH:MM or date+time if not today."""
+    if started is None:
+        return "—"
+    local = started.astimezone()
+    today = datetime.now().date()
+    if local.date() == today:
+        return local.strftime("%H:%M")
+    return local.strftime("%m-%d %H:%M")
 
 
 def _stage_label(stage: str) -> str:
@@ -103,6 +131,8 @@ class RunListScreen(Screen):
         table.add_column("Source", width=10)
         table.add_column("Stage", width=12)
         table.add_column("Status", width=18)
+        table.add_column("Started", width=12)
+        table.add_column("Elapsed", width=10)
         table.add_column("Title")
         self._load_runs()
         self.set_interval(self.REFRESH_INTERVAL, self._load_runs)
@@ -142,12 +172,16 @@ class RunListScreen(Screen):
                 _stage_label(run.stage),
                 style="bold" if run.status == RunStatus.RUNNING else "",
             )
+            started = _format_started(run.started_at)
+            elapsed = _format_elapsed(run.started_at, run.ended_at)
             title_truncated = run.title[:60] if len(run.title) > 60 else run.title
             key = table.add_row(
                 run.issue_id,
                 run.source,
                 stage_text,
                 status_text,
+                started,
+                elapsed,
                 title_truncated,
             )
             self._row_keys.append(key)
