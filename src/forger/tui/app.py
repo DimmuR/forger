@@ -8,9 +8,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import ClassVar
 
-from textual.app import App, ComposeResult
+from textual.app import App
 from textual.binding import Binding, BindingType
-from textual.widgets import Footer, Header, Static
+
+from forger.tui.screens.run_list import RunListScreen
 
 
 class ForgerTUI(App):
@@ -29,13 +30,8 @@ class ForgerTUI(App):
         super().__init__()
         self.project_dir = project_dir or Path.cwd()
 
-    def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
-        yield Static(
-            "No runs found. Start a pipeline with: forger run sentry <issue-id>",
-            id="placeholder",
-        )
-        yield Footer()
+    def on_mount(self) -> None:
+        self.push_screen(RunListScreen())
 
 
 def run() -> None:

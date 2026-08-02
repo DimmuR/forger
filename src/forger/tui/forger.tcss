@@ -1,9 +1,3 @@
 Screen {
     background: $surface;
 }
-
-#placeholder {
-    content-align: center middle;
-    height: 1fr;
-    color: $text-muted;
-}
