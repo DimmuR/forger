@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import ClassVar
@@ -20,6 +21,8 @@ from forger.tui.constants import (
     stage_label,
 )
 from forger.tui.discovery import RunInfo, RunStatus, discover_runs
+from forger.tui.screens.confirm_archive import ButtonVariant, ConfirmModal
+from forger.tui.spawner import spawn_pipeline
 from forger.tui.stopper import stop_pipeline
 
 
@@ -31,8 +34,9 @@ class RunListScreen(Screen):
         Binding("e", "open_run", "Open"),
         Binding("n", "new_intake", "New"),
         Binding("s", "stop_run", "Stop"),
+        Binding("r", "restart_run", "Restart"),
         Binding("d", "archive_run", "Archive"),
-        Binding("r", "refresh_runs", "Refresh"),
+        Binding("f5", "refresh_runs", "Refresh"),
         Binding("ctrl+q", "quit_app", "Quit"),
     ]
 
@@ -139,81 +143,109 @@ class RunListScreen(Screen):
         self._load_runs()
         self.notify("Refreshed")
 
-    def _selected_run(self) -> tuple[int, RunInfo] | None:
+    def _selected_run(self) -> RunInfo | None:
         table = self.query_one("#run-table", DataTable)
         if table.cursor_row is None or not self._runs:
             return None
         idx = table.cursor_row
         if idx < 0 or idx >= len(self._runs):
             return None
-        return idx, self._runs[idx]
+        return self._runs[idx]
 
-    def action_archive_run(self) -> None:
-        from forger.tui.screens.confirm_archive import ConfirmModal
+    def _find_run(self, issue_id: str) -> tuple[int, RunInfo] | None:
+        for i, r in enumerate(self._runs):
+            if r.issue_id == issue_id:
+                return i, r
+        return None
 
-        sel = self._selected_run()
-        if not sel:
+    def _confirm_action(
+        self,
+        *,
+        title: str,
+        body: str,
+        variant: ButtonVariant = "warning",
+        guard: Callable[[RunInfo], str | None],
+        action: Callable[[RunInfo], object],
+    ) -> None:
+        run = self._selected_run()
+        if not run:
             return
-        _idx, run = sel
-
-        if run.status in (RunStatus.RUNNING, RunStatus.STOPPING):
-            self.notify("Cannot archive a running job", severity="warning")
+        warning = guard(run)
+        if warning:
+            self.notify(warning, severity="warning")
             return
+        issue_id = run.issue_id
 
         def on_confirm(confirmed: bool | None) -> None:
             if not confirmed:
                 return
-            source_dir = run.run_dir.parent
+            found = self._find_run(issue_id)
+            if not found:
+                return
+            action(found[1])
+
+        self.app.push_screen(ConfirmModal(title, body, variant=variant), on_confirm)
+
+    def action_archive_run(self) -> None:
+        run = self._selected_run()
+        if not run:
+            return
+
+        def guard(r: RunInfo) -> str | None:
+            if r.status in (RunStatus.RUNNING, RunStatus.STOPPING):
+                return "Cannot archive a running job"
+            return None
+
+        def do_archive(r: RunInfo) -> None:
+            source_dir = r.run_dir.parent
             archive_dir = source_dir / "archive"
             archive_dir.mkdir(exist_ok=True)
-            dest = archive_dir / run.run_dir.name
+            dest = archive_dir / r.run_dir.name
             try:
-                run.run_dir.rename(dest)
+                r.run_dir.rename(dest)
             except OSError as exc:
                 self.notify(f"Archive failed: {exc}", severity="error")
                 return
-            self.notify(f"Archived {run.issue_id}")
+            self.notify(f"Archived {r.issue_id}")
             self._load_runs()
 
-        self.app.push_screen(
-            ConfirmModal(
-                "Archive Run",
-                f"Archive [b]{run.issue_id}[/b]?\nThis moves it out of the active list.",
-            ),
-            on_confirm,
+        self._confirm_action(
+            title="Archive Run",
+            body=f"Archive [b]{run.issue_id}[/b]?\nThis moves it out of the active list.",
+            guard=guard,
+            action=do_archive,
         )
 
+    RESTARTABLE = frozenset({RunStatus.STOPPED, RunStatus.CRASHED, RunStatus.FAILED})
+
     def action_stop_run(self) -> None:
-        from forger.tui.screens.confirm_archive import ConfirmModal
-
-        sel = self._selected_run()
-        if not sel:
-            return
-        idx, run = sel
-
-        if run.status != RunStatus.RUNNING:
-            self.notify("Can only stop a running job", severity="warning")
+        run = self._selected_run()
+        if not run:
             return
 
-        def on_confirm(confirmed: bool | None) -> None:
-            if not confirmed:
-                return
-            self._runs[idx] = replace(run, status=RunStatus.STOPPING)
-            self._update_table(self._runs)
-            self._do_stop(run)
+        def guard(r: RunInfo) -> str | None:
+            if r.status != RunStatus.RUNNING:
+                return "Can only stop a running job"
+            return None
 
-        self.app.push_screen(
-            ConfirmModal(
-                "Stop Pipeline",
-                f"Stop working on [b]{run.issue_id}[/b]?",
-                variant="error",
-                error_border=True,
-            ),
-            on_confirm,
+        def do_stop(r: RunInfo) -> None:
+            found = self._find_run(r.issue_id)
+            if found:
+                idx, _ = found
+                self._runs[idx] = replace(r, status=RunStatus.STOPPING)
+                self._update_table(self._runs)
+            self._do_stop_bg(r)
+
+        self._confirm_action(
+            title="Stop Pipeline",
+            body=f"Stop working on [b]{run.issue_id}[/b]?",
+            variant="error",
+            guard=guard,
+            action=do_stop,
         )
 
     @work(thread=True)
-    def _do_stop(self, run: RunInfo) -> None:
+    def _do_stop_bg(self, run: RunInfo) -> None:
         project_dir: Path = self.app.project_dir  # type: ignore[attr-defined]
         killed = stop_pipeline(run.issue_id, project_dir, run.run_dir)
         if killed:
@@ -221,6 +253,35 @@ class RunListScreen(Screen):
         else:
             self.app.call_from_thread(
                 self.notify, f"Failed to stop {run.issue_id}", severity="error"
+            )
+        self.app.call_from_thread(self._load_runs)
+
+    def action_restart_run(self) -> None:
+        run = self._selected_run()
+        if not run:
+            return
+
+        def guard(r: RunInfo) -> str | None:
+            if r.status not in self.RESTARTABLE:
+                return "Can only restart a stopped, crashed, or failed job"
+            return None
+
+        self._confirm_action(
+            title="Restart Pipeline",
+            body=f"Restart pipeline for [b]{run.issue_id}[/b]?",
+            guard=guard,
+            action=self._do_restart_bg,
+        )
+
+    @work(thread=True)
+    def _do_restart_bg(self, run: RunInfo) -> None:
+        project_dir: Path = self.app.project_dir  # type: ignore[attr-defined]
+        try:
+            spawn_pipeline(run.source, run.issue_id, project_dir)
+            self.app.call_from_thread(self.notify, f"Restarted {run.issue_id}")
+        except OSError as exc:
+            self.app.call_from_thread(
+                self.notify, f"Restart failed: {exc}", severity="error"
             )
         self.app.call_from_thread(self._load_runs)
 
@@ -237,7 +298,6 @@ class RunListScreen(Screen):
         def on_result(result: IntakeRequest | None) -> None:
             if result is None:
                 return
-            from forger.tui.spawner import spawn_pipeline
 
             issue_id = result.params.get("issue_id", "")
             if not issue_id:

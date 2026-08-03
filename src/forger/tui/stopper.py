@@ -48,9 +48,12 @@ def _emit_stopped_event(issue_id: str, run_dir: Path, project_dir: Path) -> None
             paths.append(wt_events)
 
     for path in paths:
-        with open(path, "a") as f:
-            f.write(line)
-            f.flush()
+        try:
+            with open(path, "a") as f:
+                f.write(line)
+                f.flush()
+        except OSError:
+            pass
 
 
 def _send_signal(pid: int, sig: signal.Signals) -> bool:

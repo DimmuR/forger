@@ -22,7 +22,7 @@ class RunStatus(Enum):
     """Observable run status derived from lock + pipeline state."""
 
     RUNNING = "running"
-    STOPPING = "stopping"
+    STOPPING = "stopping"  # ephemeral UI-only state, never from _determine_status
     BLOCKED = "blocked"
     COMPLETED = "completed"
     STOPPED = "stopped"
