@@ -24,7 +24,7 @@ def run_dir(tmp_path):
 def _write_deliverables(run_dir: Path):
     (run_dir / "commit.txt").write_text("fix: resolve bug")
     (run_dir / "issue.md").write_text("# Bug fix\nDetails.")
-    (run_dir / "pr.md").write_text("# Fix bug\nPR body.")
+    (run_dir / "pr.md").write_text("# Fix bug\n\nCloses #<issue-number>\n\nPR body.")
 
 
 class TestPushVerifyGuards:
@@ -80,6 +80,41 @@ class TestPushVerifyHappyPath:
         assert reloaded.github.pr == "https://github.com/org/repo/pull/1"
         assert reloaded.github.issue == "https://github.com/org/repo/issues/1"
         assert reloaded.github.branch == "forger/test-001"
+
+
+class TestIssueNumberSubstitution:
+    @patch.object(push_verify, "repo_root")
+    @patch.object(push_verify, "current_branch")
+    @patch.object(push_verify, "commit")
+    @patch.object(push_verify, "git_push")
+    @patch.object(push_verify, "create_issue")
+    @patch.object(push_verify, "create_pr")
+    def test_substitutes_issue_number_in_pr_body(
+        self,
+        mock_create_pr,
+        mock_create_issue,
+        mock_push,
+        mock_commit,
+        mock_branch,
+        mock_root,
+        run_dir,
+        config,
+    ):
+        mock_root.return_value = run_dir
+        mock_commit.return_value = "abc1234"
+        mock_branch.return_value = "forger/test-001"
+        mock_create_issue.return_value = "https://github.com/org/repo/issues/42"
+        mock_create_pr.return_value = "https://github.com/org/repo/pull/1"
+
+        state = make_state(stage="drafted")
+        save_change(run_dir / "change.md", state, "body")
+        _write_deliverables(run_dir)
+
+        assert push_verify.verify(run_dir, config) is True
+
+        pr_content = (run_dir / "pr.md").read_text()
+        assert "Closes #42" in pr_content
+        assert "#<issue-number>" not in pr_content
 
 
 class TestPushVerifyPartialFailure:
