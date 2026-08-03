@@ -9,17 +9,21 @@ from rich.text import Text
 from textual import on
 from textual.binding import Binding, BindingType
 from textual.containers import Vertical
-from textual.widgets import Markdown, OptionList, Static
+from textual.widgets import Markdown as _BaseMarkdown
+from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
 from forger.tui.artifacts import ArtifactEntry, scan_artifacts
+
+
+class _FocusableMarkdown(_BaseMarkdown, can_focus=True):
+    pass
 
 
 class ArtifactBrowser(Vertical):
     """Togglable sidebar with artifact file list and markdown preview."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("c", "copy_path", "Copy path", show=False),
         Binding("y", "copy_path", "Copy path", show=False),
     ]
 
@@ -31,7 +35,7 @@ class ArtifactBrowser(Vertical):
 
     def compose(self):
         yield OptionList(id="artifact-list")
-        yield Markdown(id="artifact-preview")
+        yield _FocusableMarkdown(id="artifact-preview")
         yield Static("Select a file to preview", id="artifact-empty")
 
     def on_mount(self) -> None:
@@ -69,7 +73,7 @@ class ArtifactBrowser(Vertical):
         except OSError:
             content = f"*Error reading {entry.path}*"
 
-        preview = self.query_one("#artifact-preview", Markdown)
+        preview = self.query_one("#artifact-preview", _FocusableMarkdown)
         empty = self.query_one("#artifact-empty")
 
         if entry.name.endswith(".md"):

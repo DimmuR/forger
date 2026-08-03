@@ -34,7 +34,6 @@ class RunListScreen(Screen):
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("enter", "select_cursor", "Open", show=False),
-        Binding("e", "open_run", "Open"),
         Binding("n", "new_intake", "New"),
         Binding("s", "stop_run", "Stop"),
         Binding("r", "restart_run", "Restart"),
@@ -135,11 +134,6 @@ class RunListScreen(Screen):
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         self._open_detail(event.cursor_row)
-
-    def action_open_run(self) -> None:
-        table = self.query_one("#run-table", DataTable)
-        if table.cursor_row is not None and self._runs:
-            self._open_detail(table.cursor_row)
 
     def _open_detail(self, row_index: int) -> None:
         if 0 <= row_index < len(self._runs):

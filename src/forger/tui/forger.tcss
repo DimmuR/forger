@@ -4,6 +4,10 @@ Screen {
     background: $surface;
 }
 
+DataTable > .datatable--hover {
+    background: transparent;
+}
+
 /* ── Run List Screen ───────────────────────────────────── */
 
 RunListScreen {
@@ -86,6 +90,10 @@ RunDetailScreen #artifact-preview {
     border-top: solid $primary-lighten-3;
     overflow: auto auto;
     scrollbar-size: 1 1;
+}
+
+RunDetailScreen #artifact-preview:focus {
+    border-top: solid $accent;
 }
 
 RunDetailScreen #artifact-empty {

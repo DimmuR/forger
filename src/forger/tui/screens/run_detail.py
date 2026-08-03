@@ -198,6 +198,7 @@ class RunDetailScreen(Screen):
         Binding("escape", "go_back", "Back", show=False),
         Binding("q", "go_back", "Back"),
         Binding("a", "toggle_artifacts", "Artifacts"),
+        Binding("tab", "cycle_artifact_focus", show=False),
         Binding("ctrl+q", "quit_app", "Quit"),
     ]
 
@@ -407,6 +408,18 @@ class RunDetailScreen(Screen):
                         continue
             except OSError:
                 continue
+
+    def action_cycle_artifact_focus(self) -> None:
+        browser = self.query_one("#artifact-browser", ArtifactBrowser)
+        if browser.has_class("-hidden"):
+            return
+        focused = self.focused
+        artifact_list = self.query_one("#artifact-list")
+        artifact_preview = self.query_one("#artifact-preview")
+        if focused is artifact_list:
+            self.set_focus(artifact_preview)
+        else:
+            self.set_focus(artifact_list)
 
     def action_toggle_artifacts(self) -> None:
         browser = self.query_one("#artifact-browser", ArtifactBrowser)
