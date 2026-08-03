@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import ClassVar
 
 from rich.text import Text
+from textual import work
 from textual.binding import Binding, BindingType
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, Label
@@ -18,6 +20,7 @@ from forger.tui.constants import (
     stage_label,
 )
 from forger.tui.discovery import RunInfo, RunStatus, discover_runs
+from forger.tui.stopper import stop_pipeline
 
 
 class RunListScreen(Screen):
@@ -27,6 +30,7 @@ class RunListScreen(Screen):
         Binding("enter", "select_cursor", "Open", show=False),
         Binding("e", "open_run", "Open"),
         Binding("n", "new_intake", "New"),
+        Binding("s", "stop_run", "Stop"),
         Binding("d", "archive_run", "Archive"),
         Binding("r", "refresh_runs", "Refresh"),
         Binding("ctrl+q", "quit_app", "Quit"),
@@ -135,18 +139,24 @@ class RunListScreen(Screen):
         self._load_runs()
         self.notify("Refreshed")
 
-    def action_archive_run(self) -> None:
-        from forger.tui.screens.confirm_archive import ConfirmArchiveModal
-
+    def _selected_run(self) -> tuple[int, RunInfo] | None:
         table = self.query_one("#run-table", DataTable)
         if table.cursor_row is None or not self._runs:
-            return
+            return None
         idx = table.cursor_row
         if idx < 0 or idx >= len(self._runs):
-            return
-        run = self._runs[idx]
+            return None
+        return idx, self._runs[idx]
 
-        if run.status == RunStatus.RUNNING:
+    def action_archive_run(self) -> None:
+        from forger.tui.screens.confirm_archive import ConfirmModal
+
+        sel = self._selected_run()
+        if not sel:
+            return
+        _idx, run = sel
+
+        if run.status in (RunStatus.RUNNING, RunStatus.STOPPING):
             self.notify("Cannot archive a running job", severity="warning")
             return
 
@@ -165,7 +175,54 @@ class RunListScreen(Screen):
             self.notify(f"Archived {run.issue_id}")
             self._load_runs()
 
-        self.app.push_screen(ConfirmArchiveModal(run.issue_id), on_confirm)
+        self.app.push_screen(
+            ConfirmModal(
+                "Archive Run",
+                f"Archive [b]{run.issue_id}[/b]?\nThis moves it out of the active list.",
+            ),
+            on_confirm,
+        )
+
+    def action_stop_run(self) -> None:
+        from forger.tui.screens.confirm_archive import ConfirmModal
+
+        sel = self._selected_run()
+        if not sel:
+            return
+        idx, run = sel
+
+        if run.status != RunStatus.RUNNING:
+            self.notify("Can only stop a running job", severity="warning")
+            return
+
+        def on_confirm(confirmed: bool | None) -> None:
+            if not confirmed:
+                return
+            self._runs[idx] = replace(run, status=RunStatus.STOPPING)
+            self._update_table(self._runs)
+            self._do_stop(run)
+
+        self.app.push_screen(
+            ConfirmModal(
+                "Stop Pipeline",
+                f"Stop working on [b]{run.issue_id}[/b]?",
+                variant="error",
+                error_border=True,
+            ),
+            on_confirm,
+        )
+
+    @work(thread=True)
+    def _do_stop(self, run: RunInfo) -> None:
+        project_dir: Path = self.app.project_dir  # type: ignore[attr-defined]
+        killed = stop_pipeline(run.issue_id, project_dir, run.run_dir)
+        if killed:
+            self.app.call_from_thread(self.notify, f"Stopped {run.issue_id}")
+        else:
+            self.app.call_from_thread(
+                self.notify, f"Failed to stop {run.issue_id}", severity="error"
+            )
+        self.app.call_from_thread(self._load_runs)
 
     def action_new_intake(self) -> None:
         from forger.tui.intakes import discover_intakes

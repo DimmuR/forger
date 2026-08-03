@@ -4,12 +4,20 @@ Writes typed events to events.jsonl in the run directory so that
 a TUI or log viewer can tail the file for live progress updates.
 """
 
-__all__ = ["EventEmitter"]
+__all__ = ["EventEmitter", "format_event_ts"]
 
 import json
 import time
 from pathlib import Path
 from typing import Any
+
+
+def format_event_ts() -> str:
+    """ISO 8601 timestamp with milliseconds for event records."""
+    return (
+        time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+        + f".{int(time.time() * 1000) % 1000:03d}Z"
+    )
 
 
 class EventEmitter:
@@ -26,8 +34,7 @@ class EventEmitter:
     def emit(self, event_type: str, **fields: Any) -> None:
         """Write one JSON event line and flush immediately."""
         record: dict[str, Any] = {
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
-            + f".{int(time.time() * 1000) % 1000:03d}Z",
+            "ts": format_event_ts(),
             "type": event_type,
         }
         record.update(fields)

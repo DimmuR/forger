@@ -19,8 +19,11 @@ STAGE_SHORT: dict[str, str] = {
 
 STATUS_STYLES: dict[RunStatus, str] = {
     RunStatus.RUNNING: "bold cyan",
+    RunStatus.STOPPING: "bold dark_orange",
     RunStatus.COMPLETED: "bold green",
-    RunStatus.CRASHED: "bold red",
+    RunStatus.STOPPED: "dim",
+    RunStatus.FAILED: "bold red",
+    RunStatus.CRASHED: "bold red reverse",
     RunStatus.BLOCKED: "bold yellow",
     RunStatus.NEEDS_ATTENTION: "bold dark_orange",
 }

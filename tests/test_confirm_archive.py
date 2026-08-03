@@ -1,4 +1,4 @@
-"""Tests for the confirm archive modal and archive action."""
+"""Tests for the confirm modal and archive action."""
 
 from __future__ import annotations
 
@@ -6,15 +6,22 @@ import asyncio
 from pathlib import Path
 
 from forger.tui.app import ForgerTUI
-from forger.tui.screens.confirm_archive import ConfirmArchiveModal
+from forger.tui.screens.confirm_archive import ConfirmModal
 
 
-class TestConfirmArchiveModal:
+def _make_archive_modal(issue_id: str) -> ConfirmModal:
+    return ConfirmModal(
+        "Archive Run",
+        f"Archive [b]{issue_id}[/b]?\nThis moves it out of the active list.",
+    )
+
+
+class TestConfirmModal:
     def test_modal_renders_issue_id(self):
         async def _test():
             app = ForgerTUI(project_dir=Path("."))
             async with app.run_test(size=(80, 24)) as pilot:
-                app.push_screen(ConfirmArchiveModal("PROJ-123"))
+                app.push_screen(_make_archive_modal("PROJ-123"))
                 await pilot.pause()
                 title = app.screen.query_one("#confirm-title")
                 assert title is not None
@@ -29,7 +36,7 @@ class TestConfirmArchiveModal:
         async def _test():
             app = ForgerTUI(project_dir=Path("."))
             async with app.run_test(size=(80, 24)) as pilot:
-                app.push_screen(ConfirmArchiveModal("X-1"), results.append)
+                app.push_screen(_make_archive_modal("X-1"), results.append)
                 await pilot.pause()
                 app.screen.query_one("#btn-yes").press()
                 await pilot.pause()
@@ -43,7 +50,7 @@ class TestConfirmArchiveModal:
         async def _test():
             app = ForgerTUI(project_dir=Path("."))
             async with app.run_test(size=(80, 24)) as pilot:
-                app.push_screen(ConfirmArchiveModal("X-1"), results.append)
+                app.push_screen(_make_archive_modal("X-1"), results.append)
                 await pilot.pause()
                 app.screen.query_one("#btn-no").press()
                 await pilot.pause()
@@ -57,7 +64,7 @@ class TestConfirmArchiveModal:
         async def _test():
             app = ForgerTUI(project_dir=Path("."))
             async with app.run_test(size=(80, 24)) as pilot:
-                app.push_screen(ConfirmArchiveModal("X-1"), results.append)
+                app.push_screen(_make_archive_modal("X-1"), results.append)
                 await pilot.pause()
                 await pilot.press("escape")
                 await pilot.pause()
@@ -71,7 +78,7 @@ class TestConfirmArchiveModal:
         async def _test():
             app = ForgerTUI(project_dir=Path("."))
             async with app.run_test(size=(80, 24)) as pilot:
-                app.push_screen(ConfirmArchiveModal("X-1"), results.append)
+                app.push_screen(_make_archive_modal("X-1"), results.append)
                 await pilot.pause()
                 await pilot.press("y")
                 await pilot.pause()
@@ -85,7 +92,7 @@ class TestConfirmArchiveModal:
         async def _test():
             app = ForgerTUI(project_dir=Path("."))
             async with app.run_test(size=(80, 24)) as pilot:
-                app.push_screen(ConfirmArchiveModal("X-1"), results.append)
+                app.push_screen(_make_archive_modal("X-1"), results.append)
                 await pilot.pause()
                 await pilot.press("n")
                 await pilot.pause()
@@ -116,7 +123,7 @@ class TestArchiveFromRunList:
                 await pilot.pause()
                 await pilot.press("d")
                 await pilot.pause()
-                assert app.screen.__class__.__name__ == "ConfirmArchiveModal"
+                assert isinstance(app.screen, ConfirmModal)
 
         asyncio.run(_test())
 

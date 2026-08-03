@@ -24,6 +24,7 @@ def _make_run(
     stage: str = "triaged",
     parked_reason: str | None = None,
     with_events: bool = False,
+    events_content: str | None = None,
     title: str | None = None,
 ) -> Path:
     """Create a run directory with change.md."""
@@ -38,7 +39,9 @@ def _make_run(
         pipeline=PipelineState(stage=stage, parked_reason=parked_reason),
     )
     save_change(run_dir / "change.md", state, "Test body.")
-    if with_events:
+    if events_content is not None:
+        (run_dir / "events.jsonl").write_text(events_content)
+    elif with_events:
         (run_dir / "events.jsonl").write_text("")
     return run_dir
 
@@ -143,6 +146,34 @@ class TestStatusDetection:
         runs = discover_runs(tmp_path)
         assert len(runs) == 1
         assert runs[0].status == RunStatus.CRASHED
+
+    def test_stopped(self, tmp_path: Path):
+        """no lock + non-terminal + pipeline_stopped event → STOPPED"""
+        _make_run(
+            tmp_path,
+            "sentry",
+            "PROJ-6",
+            stage="analyzed",
+            events_content='{"type":"pipeline_start","ts":"2026-08-02T00:00:00.000Z"}\n'
+            '{"type":"pipeline_stopped","ts":"2026-08-02T00:01:00.000Z","reason":"user"}\n',
+        )
+        runs = discover_runs(tmp_path)
+        assert len(runs) == 1
+        assert runs[0].status == RunStatus.STOPPED
+
+    def test_failed(self, tmp_path: Path):
+        """no lock + non-terminal + pipeline_end event → FAILED"""
+        _make_run(
+            tmp_path,
+            "sentry",
+            "PROJ-7",
+            stage="analyzed",
+            events_content='{"type":"pipeline_start","ts":"2026-08-02T00:00:00.000Z"}\n'
+            '{"type":"pipeline_end","ts":"2026-08-02T00:01:00.000Z","final_stage":"analyzed"}\n',
+        )
+        runs = discover_runs(tmp_path)
+        assert len(runs) == 1
+        assert runs[0].status == RunStatus.FAILED
 
     def test_needs_attention(self, tmp_path: Path):
         """no lock + non-terminal + parked → NEEDS_ATTENTION"""
