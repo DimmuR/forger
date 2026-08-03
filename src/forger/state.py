@@ -3,6 +3,7 @@
 __all__ = [
     "TERMINAL_STAGES",
     "ChangeState",
+    "Diagnosis",
     "EvidenceEntry",
     "Gate",
     "GithubState",
@@ -21,11 +22,19 @@ import frontmatter
 from pydantic import BaseModel, field_validator
 
 
+class Diagnosis(BaseModel):
+    what_failed: str
+    evidence_summary: dict[str, str] = {}
+    suggested_action: str = ""
+
+
 class PipelineState(BaseModel):
     stage: str
     stack: str | None = None
     source_properties: dict[str, Any] = {}
     parked_reason: str | None = None
+    blocked_reason: str | None = None
+    diagnosis: Diagnosis | None = None
 
     model_config = {"extra": "ignore"}
 
@@ -122,7 +131,10 @@ def save_change(path: Path, state: ChangeState, body: str) -> None:
     """Write change.md with updated frontmatter + preserved body."""
     metadata = state.model_dump(mode="json", exclude_none=True)
     pipeline = metadata.get("pipeline")
-    if isinstance(pipeline, dict) and not pipeline.get("source_properties"):
-        pipeline.pop("source_properties", None)
+    if isinstance(pipeline, dict):
+        if not pipeline.get("source_properties"):
+            pipeline.pop("source_properties", None)
+        if not pipeline.get("diagnosis"):
+            pipeline.pop("diagnosis", None)
     post = frontmatter.Post(body, **metadata)
     path.write_text(frontmatter.dumps(post) + "\n")

@@ -1,6 +1,7 @@
 from forger.state import (
     TERMINAL_STAGES,
     ChangeState,
+    Diagnosis,
     PipelineState,
     load_change,
     save_change,
@@ -240,3 +241,46 @@ def test_origin_required():
             updated="2026-07-18",
             pipeline=PipelineState(stage="triaged"),
         )
+
+
+def test_diagnosis_round_trip(tmp_path):
+    """Diagnosis survives save/load round-trip."""
+    state = ChangeState(
+        id="test-diag",
+        title="Test",
+        origin="sentry",
+        created="2026-07-18",
+        updated="2026-07-18",
+        pipeline=PipelineState(
+            stage="fix-chosen",
+            blocked_reason="fix_verified: 3 tests fail",
+            diagnosis=Diagnosis(
+                what_failed="fix_verified: 3 tests fail",
+                evidence_summary={"fix_verified": "3 tests fail", "lint": "clean"},
+                suggested_action="Re-run from this stage",
+            ),
+        ),
+    )
+    path = tmp_path / "change.md"
+    save_change(path, state, "body")
+    state2, _ = load_change(path)
+    assert state2.pipeline.diagnosis is not None
+    assert state2.pipeline.diagnosis.what_failed == "fix_verified: 3 tests fail"
+    assert state2.pipeline.diagnosis.evidence_summary["lint"] == "clean"
+    assert state2.pipeline.blocked_reason == "fix_verified: 3 tests fail"
+
+
+def test_diagnosis_none_omitted_from_yaml(tmp_path):
+    """No diagnosis key in YAML when diagnosis is None."""
+    state = ChangeState(
+        id="test-no-diag",
+        title="Test",
+        origin="sentry",
+        created="2026-07-18",
+        updated="2026-07-18",
+        pipeline=PipelineState(stage="triaged"),
+    )
+    path = tmp_path / "change.md"
+    save_change(path, state, "body")
+    content = path.read_text()
+    assert "diagnosis" not in content
