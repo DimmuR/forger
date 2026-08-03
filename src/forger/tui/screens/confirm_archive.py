@@ -1,4 +1,4 @@
-"""Confirm archive modal — yes/no before archiving a run."""
+"""Generic confirmation modal — yes/no before a destructive action."""
 
 from __future__ import annotations
 
@@ -8,10 +8,11 @@ from textual.binding import Binding, BindingType
 from textual.containers import Grid, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Label
+from textual.widgets._button import ButtonVariant
 
 
-class ConfirmArchiveModal(ModalScreen[bool]):
-    """Confirmation dialog before archiving a run."""
+class ConfirmModal(ModalScreen[bool]):
+    """Parameterized confirmation dialog."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "cancel", "Cancel", show=False),
@@ -20,7 +21,7 @@ class ConfirmArchiveModal(ModalScreen[bool]):
     ]
 
     DEFAULT_CSS = """
-    ConfirmArchiveModal {
+    ConfirmModal {
         align: center middle;
     }
 
@@ -30,6 +31,10 @@ class ConfirmArchiveModal(ModalScreen[bool]):
         border: thick $warning;
         background: $surface;
         padding: 1 2;
+    }
+
+    #confirm-dialog.--error {
+        border: thick $error;
     }
 
     #confirm-title {
@@ -56,21 +61,30 @@ class ConfirmArchiveModal(ModalScreen[bool]):
     }
     """
 
-    def __init__(self, issue_id: str) -> None:
+    def __init__(
+        self,
+        title: str,
+        body: str,
+        *,
+        variant: ButtonVariant = "warning",
+        error_border: bool = False,
+    ) -> None:
         super().__init__()
-        self._issue_id = issue_id
+        self._title = title
+        self._body = body
+        self._variant: ButtonVariant = variant
+        self._error_border = error_border
 
     def compose(self):
-        with Vertical(id="confirm-dialog"):
-            yield Label("Archive Run", id="confirm-title")
-            yield Label(
-                f"Archive [b]{self._issue_id}[/b]?\nThis moves it out of the active list.",
-                id="confirm-body",
-                markup=True,
-            )
+        dialog = Vertical(id="confirm-dialog")
+        if self._error_border:
+            dialog.add_class("--error")
+        with dialog:
+            yield Label(self._title, id="confirm-title")
+            yield Label(self._body, id="confirm-body", markup=True)
             with Grid(id="confirm-buttons"):
                 yield Button("No", variant="default", id="btn-no")
-                yield Button("Yes", variant="warning", id="btn-yes")
+                yield Button("Yes", variant=self._variant, id="btn-yes")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-yes":

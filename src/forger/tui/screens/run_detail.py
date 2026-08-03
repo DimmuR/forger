@@ -108,6 +108,9 @@ def _format_pipeline_event(ev: dict) -> Text:
         issue: str = ev.get("issue_id", "")
         t.append(f"[{short_ts}] ", style="bold dim")
         t.append(f"Pipeline started: {source}/{issue}", style="bold cyan")
+    elif event_type == "pipeline_stopped":
+        t.append(f"[{short_ts}] ", style="bold dim")
+        t.append("Pipeline stopped by user", style="bold dark_orange")
     elif event_type == "pipeline_end":
         final: str = ev.get("final_stage", "")
         total_tokens: int = ev.get("total_tokens", 0)
@@ -136,7 +139,7 @@ def _format_event(ev: dict) -> Text | None:
         return _format_stage_end(ev)
     if event_type == "blocked":
         return _format_blocked(ev)
-    if event_type in ("pipeline_start", "pipeline_end"):
+    if event_type in ("pipeline_start", "pipeline_end", "pipeline_stopped"):
         return _format_pipeline_event(ev)
     if event_type == "skip":
         t = Text()

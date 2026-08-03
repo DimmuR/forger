@@ -22,8 +22,11 @@ class RunStatus(Enum):
     """Observable run status derived from lock + pipeline state."""
 
     RUNNING = "running"
+    STOPPING = "stopping"
     BLOCKED = "blocked"
     COMPLETED = "completed"
+    STOPPED = "stopped"
+    FAILED = "failed"
     CRASHED = "crashed"
     NEEDS_ATTENTION = "needs_attention"
 
@@ -109,17 +112,17 @@ def is_lock_held(issue_id: str, project_dir: Path) -> bool:
 
 
 def _determine_status(
-    stage: str, parked_reason: str | None, lock_held: bool
+    stage: str,
+    parked_reason: str | None,
+    lock_held: bool,
+    exit_type: str | None = None,
 ) -> RunStatus:
-    """Derive run status from lock state and pipeline state.
+    """Derive run status from lock state, pipeline state, and exit type.
 
-    Logic table from decision #10:
-      lock_held  terminal  parked  → status
-      yes        no        no      → RUNNING
-      yes        no        yes     → BLOCKED
-      no         yes       —       → COMPLETED
-      no         no        no      → CRASHED
-      no         no        yes     → NEEDS_ATTENTION
+    exit_type comes from events.jsonl:
+      "stopped"  → user stopped via TUI
+      "ended"    → process exited gracefully (pipeline_end emitted)
+      None       → no terminal event (process died abruptly)
     """
     is_terminal = stage in TERMINAL_STAGES
 
@@ -131,8 +134,15 @@ def _determine_status(
     if is_terminal:
         return RunStatus.COMPLETED
 
+    if exit_type == "stopped":
+        return RunStatus.STOPPED
+
     if parked_reason:
         return RunStatus.NEEDS_ATTENTION
+
+    if exit_type == "ended":
+        return RunStatus.FAILED
+
     return RunStatus.CRASHED
 
 
@@ -145,41 +155,48 @@ def _parse_ts(raw: str) -> datetime | None:
         return None
 
 
-def _read_event_timestamps(
-    events_path: Path,
-) -> tuple[datetime | None, datetime | None]:
-    """Extract start and end timestamps from events.jsonl.
+@dataclass(frozen=True)
+class _EventSummary:
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    exit_type: str | None = None
 
-    Reads first line for pipeline_start ts, last line for pipeline_end ts.
+
+def _read_event_summary(events_path: Path) -> _EventSummary:
+    """Extract timestamps and exit type from events.jsonl.
+
+    exit_type: "stopped" if pipeline_stopped found, "ended" if pipeline_end
+    found, None if neither (abrupt death).
     """
     if not events_path.exists():
-        return None, None
+        return _EventSummary()
 
     started_at: datetime | None = None
     ended_at: datetime | None = None
+    exit_type: str | None = None
 
     try:
         with open(events_path) as f:
-            first_line = f.readline().strip()
-            if first_line:
-                ev = json.loads(first_line)
-                if ev.get("type") == "pipeline_start":
-                    started_at = _parse_ts(ev.get("ts", ""))
-
-            last_line = first_line
             for line in f:
                 stripped = line.strip()
-                if stripped:
-                    last_line = stripped
-
-            if last_line and last_line != first_line:
-                ev = json.loads(last_line)
-                if ev.get("type") == "pipeline_end":
+                if not stripped:
+                    continue
+                ev = json.loads(stripped)
+                ev_type = ev.get("type")
+                if ev_type == "pipeline_start":
+                    started_at = _parse_ts(ev.get("ts", ""))
+                    ended_at = None
+                    exit_type = None
+                elif ev_type == "pipeline_stopped":
+                    exit_type = "stopped"
+                elif ev_type == "pipeline_end":
                     ended_at = _parse_ts(ev.get("ts", ""))
+                    if exit_type != "stopped":
+                        exit_type = "ended"
     except (json.JSONDecodeError, OSError):
         pass
 
-    return started_at, ended_at
+    return _EventSummary(started_at=started_at, ended_at=ended_at, exit_type=exit_type)
 
 
 def discover_runs(project_dir: Path) -> list[RunInfo]:
@@ -214,7 +231,7 @@ def discover_runs(project_dir: Path) -> list[RunInfo]:
                     continue
 
                 events_path = run_dir / "events.jsonl"
-                started_at, ended_at = _read_event_timestamps(events_path)
+                ev = _read_event_summary(events_path)
                 runs.append(
                     RunInfo(
                         issue_id=bare_id,
@@ -224,8 +241,8 @@ def discover_runs(project_dir: Path) -> list[RunInfo]:
                         title=bare_id,
                         run_dir=run_dir,
                         has_events=events_path.exists(),
-                        started_at=started_at,
-                        ended_at=ended_at,
+                        started_at=ev.started_at,
+                        ended_at=ev.ended_at,
                     )
                 )
                 continue
@@ -252,9 +269,6 @@ def discover_runs(project_dir: Path) -> list[RunInfo]:
                         state, _ = load_change(wt_change)
 
             lock_held = is_lock_held(bare_id, project_dir)
-            status = _determine_status(
-                state.pipeline.stage, state.pipeline.parked_reason, lock_held
-            )
 
             # Check both canonical and worktree for events
             events_path = run_dir / "events.jsonl"
@@ -262,7 +276,14 @@ def discover_runs(project_dir: Path) -> list[RunInfo]:
                 wt_events = worktree.worktree_run_dir(wt_path) / "events.jsonl"
                 if wt_events.exists():
                     events_path = wt_events
-            started_at, ended_at = _read_event_timestamps(events_path)
+            ev = _read_event_summary(events_path)
+
+            status = _determine_status(
+                state.pipeline.stage,
+                state.pipeline.parked_reason,
+                lock_held,
+                ev.exit_type,
+            )
 
             runs.append(
                 RunInfo(
@@ -275,8 +296,8 @@ def discover_runs(project_dir: Path) -> list[RunInfo]:
                     parked_reason=state.pipeline.parked_reason,
                     has_events=events_path.exists()
                     or (run_dir / "events.jsonl").exists(),
-                    started_at=started_at,
-                    ended_at=ended_at,
+                    started_at=ev.started_at,
+                    ended_at=ev.ended_at,
                 )
             )
 
