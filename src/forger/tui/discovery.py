@@ -29,6 +29,8 @@ class RunStatus(Enum):
     FAILED = "failed"
     CRASHED = "crashed"
     NEEDS_ATTENTION = "needs_attention"
+    SCHEDULED = "scheduled"
+    MISSED = "missed"
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,7 @@ class RunInfo:
     has_events: bool = False
     started_at: datetime | None = None
     ended_at: datetime | None = None
+    fire_at: datetime | None = None
 
     @property
     def stage_index(self) -> int:
@@ -160,6 +163,9 @@ class _EventSummary:
     started_at: datetime | None = None
     ended_at: datetime | None = None
     exit_type: str | None = None
+    fire_at: datetime | None = None
+    is_scheduled: bool = False
+    schedule_cancelled: bool = False
 
 
 def _read_event_summary(events_path: Path) -> _EventSummary:
@@ -174,6 +180,9 @@ def _read_event_summary(events_path: Path) -> _EventSummary:
     started_at: datetime | None = None
     ended_at: datetime | None = None
     exit_type: str | None = None
+    fire_at: datetime | None = None
+    is_scheduled: bool = False
+    schedule_cancelled: bool = False
 
     try:
         with open(events_path) as f:
@@ -193,10 +202,23 @@ def _read_event_summary(events_path: Path) -> _EventSummary:
                     ended_at = _parse_ts(ev.get("ts", ""))
                     if exit_type != "stopped":
                         exit_type = "ended"
+                elif ev_type == "pipeline_scheduled":
+                    fire_at = _parse_ts(ev.get("fire_at", ""))
+                    is_scheduled = True
+                    schedule_cancelled = False
+                elif ev_type == "pipeline_schedule_cancelled":
+                    schedule_cancelled = True
     except (json.JSONDecodeError, OSError):
         pass
 
-    return _EventSummary(started_at=started_at, ended_at=ended_at, exit_type=exit_type)
+    return _EventSummary(
+        started_at=started_at,
+        ended_at=ended_at,
+        exit_type=exit_type,
+        fire_at=fire_at,
+        is_scheduled=is_scheduled,
+        schedule_cancelled=schedule_cancelled,
+    )
 
 
 def discover_runs(project_dir: Path) -> list[RunInfo]:
@@ -226,12 +248,34 @@ def discover_runs(project_dir: Path) -> list[RunInfo]:
             bare_id = dir_name[4:] if dir_name.startswith("run-") else dir_name
 
             if not change_path.exists():
+                events_path = run_dir / "events.jsonl"
+                ev = _read_event_summary(events_path)
+
+                # Scheduled run: no change.md yet, has pipeline_scheduled event
+                if ev.is_scheduled and not ev.schedule_cancelled and not ev.started_at:
+                    now = datetime.now(UTC)
+                    if ev.fire_at and ev.fire_at > now:
+                        sched_status = RunStatus.SCHEDULED
+                    else:
+                        sched_status = RunStatus.MISSED
+                    runs.append(
+                        RunInfo(
+                            issue_id=bare_id,
+                            source=source,
+                            stage="scheduled",
+                            status=sched_status,
+                            title=bare_id,
+                            run_dir=run_dir,
+                            has_events=True,
+                            fire_at=ev.fire_at,
+                        )
+                    )
+                    continue
+
                 # No change.md yet — visible only if lock held (intake in progress)
                 if not is_lock_held(bare_id, project_dir):
                     continue
 
-                events_path = run_dir / "events.jsonl"
-                ev = _read_event_summary(events_path)
                 runs.append(
                     RunInfo(
                         issue_id=bare_id,
@@ -303,5 +347,5 @@ def discover_runs(project_dir: Path) -> list[RunInfo]:
 
     # Most recent first; runs without timestamps sort last
     _epoch = datetime.min.replace(tzinfo=UTC)
-    runs.sort(key=lambda r: r.started_at or _epoch, reverse=True)
+    runs.sort(key=lambda r: r.started_at or r.fire_at or _epoch, reverse=True)
     return runs

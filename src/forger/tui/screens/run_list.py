@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
 
@@ -11,18 +12,20 @@ from rich.text import Text
 from textual import work
 from textual.binding import Binding, BindingType
 from textual.screen import Screen
+from textual.timer import Timer
 from textual.widgets import DataTable, Footer, Header, Label
 from textual.widgets.data_table import RowKey
 
 from forger.tui.constants import (
     STATUS_STYLES,
     format_elapsed,
+    format_fire_at,
     format_started,
     stage_label,
 )
 from forger.tui.discovery import RunInfo, RunStatus, discover_runs
 from forger.tui.screens.confirm_archive import ButtonVariant, ConfirmModal
-from forger.tui.spawner import spawn_pipeline
+from forger.tui.spawner import cancel_schedule, schedule_pipeline, spawn_pipeline
 from forger.tui.stopper import stop_pipeline
 
 
@@ -36,16 +39,20 @@ class RunListScreen(Screen):
         Binding("s", "stop_run", "Stop"),
         Binding("r", "restart_run", "Restart"),
         Binding("d", "archive_run", "Archive"),
+        Binding("c", "cancel_schedule", "Cancel"),
         Binding("f5", "refresh_runs", "Refresh"),
         Binding("ctrl+q", "quit_app", "Quit"),
     ]
 
     REFRESH_INTERVAL = 3.0
 
+    CANCELLABLE = frozenset({RunStatus.SCHEDULED, RunStatus.MISSED})
+
     def __init__(self) -> None:
         super().__init__()
         self._runs: list[RunInfo] = []
         self._row_keys: list[RowKey] = []
+        self._schedule_timers: dict[str, Timer] = {}
 
     def compose(self):
         yield Header(show_clock=True)
@@ -67,6 +74,7 @@ class RunListScreen(Screen):
         table.add_column("Elapsed", width=10)
         table.add_column("Title")
         self._load_runs()
+        self._recover_schedules()
         self.set_interval(self.REFRESH_INTERVAL, self._load_runs)
 
     def _load_runs(self) -> None:
@@ -102,8 +110,12 @@ class RunListScreen(Screen):
                 stage_label(run.stage),
                 style="bold" if run.status == RunStatus.RUNNING else "",
             )
-            started = format_started(run.started_at)
-            elapsed = format_elapsed(run.started_at, run.ended_at)
+            if run.status in (RunStatus.SCHEDULED, RunStatus.MISSED):
+                started = format_fire_at(run.fire_at)
+                elapsed = "—"
+            else:
+                started = format_started(run.started_at)
+                elapsed = format_elapsed(run.started_at, run.ended_at)
             title_truncated = (
                 run.title[:57] + "..." if len(run.title) > 60 else run.title
             )
@@ -303,12 +315,87 @@ class RunListScreen(Screen):
             if not issue_id:
                 self.notify("No issue ID provided", severity="error")
                 return
-            try:
-                spawn_pipeline(result.source, issue_id, project_dir)
-            except OSError as exc:
-                self.notify(f"Spawn failed: {exc}", severity="error")
+
+            if self._find_run(issue_id):
+                self.notify(f"{issue_id} is already on the list", severity="warning")
                 return
-            self.notify(f"Started {result.source} intake: {issue_id}")
+
+            if result.fire_at:
+                try:
+                    schedule_pipeline(
+                        result.source,
+                        issue_id,
+                        project_dir,
+                        result.fire_at,
+                        result.params,
+                    )
+                except OSError as exc:
+                    self.notify(f"Schedule failed: {exc}", severity="error")
+                    return
+                self._arm_timer(result.source, issue_id, result.fire_at)
+                self.notify(f"Scheduled {issue_id} for {result.fire_at:%H:%M}")
+            else:
+                try:
+                    spawn_pipeline(result.source, issue_id, project_dir)
+                except OSError as exc:
+                    self.notify(f"Spawn failed: {exc}", severity="error")
+                    return
+                self.notify(f"Started {result.source} intake: {issue_id}")
             self._load_runs()
 
         self.app.push_screen(NewIntakeModal(intakes), on_result)
+
+    def _arm_timer(self, source: str, issue_id: str, fire_at: datetime) -> None:
+        """Arm a Textual timer to fire a scheduled run."""
+        key = f"{source}/{issue_id}"
+        if key in self._schedule_timers:
+            self._schedule_timers[key].stop()
+
+        delay = (fire_at - datetime.now(UTC)).total_seconds()
+        if delay <= 0:
+            return
+
+        def _fire() -> None:
+            self._schedule_timers.pop(key, None)
+            project_dir: Path = self.app.project_dir  # type: ignore[attr-defined]
+            try:
+                spawn_pipeline(source, issue_id, project_dir)
+                self.notify(f"Scheduled run fired: {issue_id}")
+            except OSError as exc:
+                self.notify(f"Scheduled run failed: {exc}", severity="error")
+            self._load_runs()
+
+        timer = self.set_timer(delay, _fire)
+        self._schedule_timers[key] = timer
+
+    def _recover_schedules(self) -> None:
+        """Re-arm timers for SCHEDULED runs found on startup."""
+        for run in self._runs:
+            if run.status == RunStatus.SCHEDULED and run.fire_at:
+                self._arm_timer(run.source, run.issue_id, run.fire_at)
+
+    def action_cancel_schedule(self) -> None:
+        run = self._selected_run()
+        if not run:
+            return
+
+        def guard(r: RunInfo) -> str | None:
+            if r.status not in self.CANCELLABLE:
+                return "Can only cancel a scheduled or missed run"
+            return None
+
+        def do_cancel(r: RunInfo) -> None:
+            key = f"{r.source}/{r.issue_id}"
+            timer = self._schedule_timers.pop(key, None)
+            if timer:
+                timer.stop()
+            cancel_schedule(r.run_dir)
+            self.notify(f"Cancelled {r.issue_id}")
+            self._load_runs()
+
+        self._confirm_action(
+            title="Cancel Schedule",
+            body=f"Cancel scheduled run [b]{run.issue_id}[/b]?",
+            guard=guard,
+            action=do_cancel,
+        )

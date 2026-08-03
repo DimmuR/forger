@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import ClassVar
 
 from textual.binding import Binding, BindingType
@@ -13,10 +14,41 @@ from textual.widgets import Button, Input, Label, Select, Switch
 from forger.tui.intakes import IntakeConfig, IntakeParam
 
 
+def _parse_schedule(raw: str) -> datetime | None:
+    """Parse schedule string. Accepts 'HH:MM' (next occurrence) or 'YYYY-MM-DD HH:MM'."""
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+
+    local_tz = ZoneInfo("localtime")
+
+    for fmt in ("%Y-%m-%d %H:%M", "%H:%M"):
+        try:
+            parsed = datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+
+        if fmt == "%H:%M":
+            now = datetime.now(local_tz)
+            candidate = now.replace(
+                hour=parsed.hour, minute=parsed.minute, second=0, microsecond=0
+            )
+            if candidate <= now:
+                candidate += timedelta(days=1)
+            return candidate.astimezone(UTC)
+
+        fire_at = parsed.replace(tzinfo=local_tz).astimezone(UTC)
+        if fire_at <= datetime.now(UTC):
+            return None
+        return fire_at
+
+    return None
+
+
 @dataclass
 class IntakeRequest:
     source: str
     params: dict[str, str]
+    fire_at: datetime | None = None
 
 
 class NewIntakeModal(ModalScreen[IntakeRequest | None]):
@@ -69,6 +101,16 @@ class NewIntakeModal(ModalScreen[IntakeRequest | None]):
         margin-bottom: 1;
     }
 
+    .schedule-label {
+        padding: 0;
+        color: $text-muted;
+    }
+
+    #schedule-input {
+        width: 100%;
+        margin-bottom: 1;
+    }
+
     #button-bar {
         layout: horizontal;
         width: 100%;
@@ -102,6 +144,12 @@ class NewIntakeModal(ModalScreen[IntakeRequest | None]):
             )
 
             yield Vertical(id="param-container")
+
+            yield Label("Schedule (leave empty for now)", classes="schedule-label")
+            yield Input(
+                placeholder="HH:MM or YYYY-MM-DD HH:MM",
+                id="schedule-input",
+            )
 
             with Grid(id="button-bar"):
                 yield Button("Cancel", variant="default", id="btn-cancel")
@@ -189,7 +237,19 @@ class NewIntakeModal(ModalScreen[IntakeRequest | None]):
 
             params[param.key] = value
 
-        self.dismiss(IntakeRequest(source=self._current.source, params=params))
+        fire_at: datetime | None = None
+        schedule_raw = self.query_one("#schedule-input", Input).value.strip()
+        if schedule_raw:
+            fire_at = _parse_schedule(schedule_raw)
+            if fire_at is None:
+                self.notify(
+                    "Invalid format. Use HH:MM or YYYY-MM-DD HH:MM", severity="error"
+                )
+                return
+
+        self.dismiss(
+            IntakeRequest(source=self._current.source, params=params, fire_at=fire_at)
+        )
 
     def action_cancel(self) -> None:
         self.dismiss(None)
