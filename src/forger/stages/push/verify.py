@@ -75,8 +75,16 @@ def verify(run_dir: Path, config: ProjectConfig) -> bool:
             print(f"  ⛔ Issue creation failed: {e}", flush=True)
             return False
 
-    # PR
+    # Substitute issue number into pr.md
     pr_file = run_dir / "pr.md"
+    if pr_file.exists() and state.github.issue:
+        issue_number = state.github.issue.rstrip("/").rsplit("/", 1)[-1]
+        pr_content = pr_file.read_text()
+        updated = pr_content.replace("#<issue-number>", f"#{issue_number}")
+        if updated != pr_content:
+            pr_file.write_text(updated)
+
+    # PR
     if pr_file.exists() and not state.github.pr:
         try:
             content = pr_file.read_text()

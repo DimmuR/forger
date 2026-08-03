@@ -15,12 +15,12 @@ Apply the chosen fix option. Transition: `fix-chosen` → `fixed`. Verification 
 7. Record evidence with one-line `summary` (what passed/failed, e.g. "3 tests pass, 0 fail" or "AssertionError in test_foo"):
    - `evidence.fix_verified`: path, exit_code, last_run, summary
    - `evidence.lint`: exit_code, last_run, summary
-8. Commit all application code changes: `git add -u && git commit -m "forger: implement <option>"`. Only stage tracked files — do not use `git add -A` to avoid picking up stray untracked files. If you created new files, add them explicitly by path. This preserves work across review loop-backs.
+8. Commit all application code changes: `git add -u && git commit -m "fix: <brief symptom-level description>"`. Use conventional commit format — the subject must describe what the fix does from a user perspective, not reference option letters or internal jargon. Only stage tracked files — do not use `git add -A` to avoid picking up stray untracked files. If you created new files, add them explicitly by path. This preserves work across review loop-backs.
 9. Bump `updated`. Do NOT modify `pipeline.stage` — the harness handles transitions.
 
 ## Outputs
 
-- Application code changes, committed with message `forger: implement <option>`
+- Application code changes, committed with conventional commit message (`fix: <description>`)
 - `fix-options.md` gains `## Implementation notes` (only if deviations)
 
 ## Before writing code, answer:

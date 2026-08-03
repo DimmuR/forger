@@ -22,14 +22,15 @@ Produce deliverable files for push. Transition: `reviewed` → `drafted`. Pure t
      Detail belongs in the PR, not here.
    - If a source tracking link is available (e.g. Sentry issue URL), include it
      at the bottom as `**Sentry:** <url>` or `**Source:** <url>`.
-3. Write `commit.txt`: subject line + body summarizing root cause and fix.
+3. Write `commit.txt`: conventional commit format. Subject line: `fix: <user-perspective symptom>` (echo the issue title, not implementation jargon). Body: 1-2 sentences on root cause and what was changed.
 4. Write `changelog.txt`: one line describing the fix.
 5. Write `pr.md`: first line is `# <title>` (push harness takes line 1 for `gh --title`).
    Title must start with `fix:` followed by the user-perspective symptom from the issue
    title (echo it, don't rephrase into implementation jargon).
    Body sections:
-   - `Closes #<issue-number>` — standalone line linking to the issue. No problem
-     restatement; the issue already describes the symptom.
+   - `Closes #<issue-number>` — standalone line, exactly as shown (the push harness
+     substitutes the real number after issue creation). No problem restatement;
+     the issue already describes the symptom.
    - **Root cause** — 3-5 sentences in narrative style. May reference file paths and
      handler/function names inline, but no line numbers. Explain the call chain that
      leads to the failure clearly enough that a reviewer unfamiliar with the code
