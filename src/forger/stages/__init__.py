@@ -16,7 +16,13 @@ from pathlib import Path
 
 from forger.config import ProjectConfig
 from forger.pipeline import STAGE_BY_NAME, VerifyCheck
-from forger.state import TERMINAL_STAGES, ChangeState, load_change, save_change
+from forger.state import (
+    TERMINAL_STAGES,
+    ChangeState,
+    Diagnosis,
+    load_change,
+    save_change,
+)
 
 
 @dataclass
@@ -82,19 +88,23 @@ def _make_declarative_verify(
 ) -> Callable[[Path, "ProjectConfig"], bool]:
     """Build a verify function from a VerifyCheck spec."""
 
-    def _check_fn(run_dir: Path, state: ChangeState) -> bool:
+    def _check_fn(run_dir: Path, state: ChangeState) -> list[str]:
+        reasons: list[str] = []
         for f in check.required_files:
             if not (run_dir / f).exists():
-                return False
+                reasons.append(f"{f} not produced")
         for key, expected_code in check.evidence_checks:
             entry = state.evidence.get(key)
-            if not entry or entry.exit_code != expected_code:
-                return False
+            if not entry:
+                reasons.append(f"{key}: N/A")
+            elif entry.exit_code != expected_code:
+                summary = entry.summary or f"exit {entry.exit_code}"
+                reasons.append(f"{key}: {summary}")
         if check.gate_resolved:
             gate = state.gates.get(check.gate_resolved)
             if not gate or not gate.resolved:
-                return False
-        return True
+                reasons.append(f"Gate '{check.gate_resolved}' awaiting resolution")
+        return reasons
 
     def verify(run_dir: Path, config: ProjectConfig) -> bool:
         return verify_stage(run_dir, config, post_stage, pre_stage, _check_fn)
@@ -143,7 +153,7 @@ def verify_stage(
     config: ProjectConfig,
     target_stage: str,
     pre_stage: str,
-    check_fn: Callable[[Path, ChangeState], bool],
+    check_fn: Callable[[Path, ChangeState], list[str]],
 ) -> bool:
     """Common verify pattern: load state, check terminal/parked, check pre-state, run check, set stage, save."""
     change_path = run_dir / "change.md"
@@ -158,9 +168,39 @@ def verify_stage(
     if state.pipeline.stage == target_stage:
         return True
 
-    if not check_fn(run_dir, state):
+    reasons = check_fn(run_dir, state)
+    if reasons:
+        evidence_summary = {
+            k: e.summary or f"exit {e.exit_code}"
+            for k, e in state.evidence.items()
+            if e.summary or e.exit_code is not None
+        }
+        state.pipeline.blocked_reason = "; ".join(reasons)
+        state.pipeline.diagnosis = Diagnosis(
+            what_failed=reasons[0],
+            evidence_summary=evidence_summary,
+            suggested_action=_suggest_action(reasons),
+        )
+        save_change(change_path, state, body)
         return False
 
     state.pipeline.stage = target_stage
+    state.pipeline.blocked_reason = None
+    state.pipeline.diagnosis = None
     save_change(change_path, state, body)
     return True
+
+
+_ACTION_HINTS: dict[str, str] = {
+    "not produced": "Re-run stage — LLM may not have written required file",
+    "N/A": "Re-run stage — evidence was never recorded",
+    "Gate": "Resolve gate in TUI or pass --gate flag",
+}
+
+
+def _suggest_action(reasons: list[str]) -> str:
+    for reason in reasons:
+        for hint_key, action in _ACTION_HINTS.items():
+            if hint_key in reason:
+                return action
+    return "Re-run from this stage"

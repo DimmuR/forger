@@ -29,6 +29,7 @@ from forger.stages import StageDef, load_verify, resolve_stage
 from forger.state import (
     TERMINAL_STAGES,
     ChangeState,
+    Diagnosis,
     PipelineState,
     RunOutcome,
     load_change,
@@ -182,6 +183,7 @@ class PipelineRunner:
 
             # Max stages reached
             state, _ = load_change(self.run_dir / "change.md")
+            self._write_failure_diagnosis("pipeline", "Max stage transitions reached")
             outcome = self._outcome(
                 final_stage=state.pipeline.stage,
                 stages_executed=self.stages_executed,
@@ -463,15 +465,16 @@ class PipelineRunner:
         self.stages_executed += 1
 
         if not advanced:
-            reason = f"Stage '{stage_name}' did not advance"
             final_stage = "unknown"
             gate = None
+            reason = f"Stage '{stage_name}' did not advance"
             if change_path.exists():
                 state, _ = load_change(change_path)
                 final_stage = state.pipeline.stage
                 if state.pipeline.parked_reason:
                     reason = f"Parked: {state.pipeline.parked_reason}"
-                # Detect unresolved gate
+                elif state.pipeline.blocked_reason:
+                    reason = state.pipeline.blocked_reason
                 for gname, gval in state.gates.items():
                     if gval.required and gval.resolved is None:
                         gate = gname
@@ -504,6 +507,30 @@ class PipelineRunner:
             )
 
         return None
+
+    def _write_failure_diagnosis(self, stage_name: str, what_failed: str) -> None:
+        """Persist a Diagnosis to change.md for runner/timeout/max-stages failures."""
+        change_path = self.run_dir / "change.md"
+        if not change_path.exists():
+            return
+        state, body = load_change(change_path)
+        evidence_summary = {
+            k: e.summary or f"exit {e.exit_code}"
+            for k, e in state.evidence.items()
+            if e.summary or e.exit_code is not None
+        }
+        suggested = "Re-run from this stage"
+        if "timed out" in what_failed.lower():
+            suggested = f"Re-run {stage_name} (may need longer timeout)"
+        elif "exit" in what_failed.lower():
+            suggested = f"Check run.log for {stage_name} output, then re-run"
+        state.pipeline.blocked_reason = what_failed
+        state.pipeline.diagnosis = Diagnosis(
+            what_failed=what_failed,
+            evidence_summary=evidence_summary,
+            suggested_action=suggested,
+        )
+        save_change(change_path, state, body)
 
     def _resolve_and_dispatch(self) -> RunOutcome | None:
         """Handle one iteration of the main loop.
@@ -562,6 +589,9 @@ class PipelineRunner:
         self.total_tokens += stage_result.tokens
 
         if stage_result.failed:
+            self._write_failure_diagnosis(
+                stage_name, stage_result.blocked_reason or "Runner failed"
+            )
             return self._outcome(
                 final_stage=state.pipeline.stage,
                 stages_executed=self.stages_executed,

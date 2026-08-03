@@ -17,6 +17,7 @@ from textual.widgets import Footer, Header, Label, RichLog
 
 from forger import worktree
 from forger.pipeline import STAGE_BY_NAME
+from forger.state import load_change
 from forger.tui.constants import format_tokens
 from forger.tui.discovery import RunInfo, RunStatus, _parse_ts, discover_runs
 from forger.tui.widgets.artifact_browser import ArtifactBrowser
@@ -242,6 +243,7 @@ class RunDetailScreen(Screen):
     def on_mount(self) -> None:
         self.query_one("#run-gone").display = False
         self._load_existing_events()
+        self._show_diagnosis()
         if self.run.status in _ACTIVE_STATUSES:
             self._tail_events()
             self.set_interval(self.REFRESH_INTERVAL, self._refresh_run_info)
@@ -316,6 +318,39 @@ class RunDetailScreen(Screen):
         bar = self.query_one("#stage-bar", StageProgressBar)
         bar.update_run(run)
         bar.update_times(times)
+
+    def _show_diagnosis(self) -> None:
+        """Show diagnosis panel if pipeline has a diagnosis in change.md."""
+        change_path = self.run.run_dir / "change.md"
+        if not change_path.exists():
+            return
+        try:
+            state, _ = load_change(change_path)
+        except Exception:
+            return
+        diag = state.pipeline.diagnosis
+        if not diag:
+            return
+        log = self.query_one("#event-log", RichLog)
+        log.write(Text())
+        header = Text()
+        header.append("  ─── Diagnosis ───", style="bold yellow")
+        log.write(header)
+        what = Text()
+        what.append("  Failed: ", style="bold red")
+        what.append(diag.what_failed)
+        log.write(what)
+        if diag.evidence_summary:
+            for key, summary in diag.evidence_summary.items():
+                ev_line = Text()
+                ev_line.append(f"    {key}: ", style="dim")
+                ev_line.append(summary)
+                log.write(ev_line)
+        if diag.suggested_action:
+            action = Text()
+            action.append("  Next: ", style="bold green")
+            action.append(diag.suggested_action)
+            log.write(action)
 
     def _load_existing_events(self) -> None:
         """Load all existing events from events.jsonl files."""

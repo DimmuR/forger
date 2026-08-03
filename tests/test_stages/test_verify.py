@@ -9,6 +9,7 @@ from forger.state import (
     ChangeState,
     EvidenceEntry,
     Gate,
+    load_change,
     save_change,
 )
 from tests import make_state
@@ -297,3 +298,103 @@ def test_draft_verify_missing_deliverable(tmp_path, config, base_state):
     stage_def = resolve_stage("draft", "sentry")
     verify_fn = load_verify(stage_def)
     assert verify_fn(tmp_path, config) is False
+
+
+# --- Diagnosis tests ---
+
+
+class TestDiagnosisOnVerifyFailure:
+    def test_missing_file_writes_diagnosis(self, tmp_path, config, base_state):
+        base_state.pipeline.stage = "triaged"
+        _write_change(tmp_path, base_state)
+
+        stage_def = resolve_stage("analyze", "sentry")
+        verify_fn = load_verify(stage_def)
+        assert verify_fn(tmp_path, config) is False
+
+        state, _ = load_change(tmp_path / "change.md")
+        assert state.pipeline.diagnosis is not None
+        assert "analysis.md not produced" in state.pipeline.diagnosis.what_failed
+        assert "not produced" in state.pipeline.blocked_reason
+
+    def test_evidence_exit_code_writes_diagnosis(self, tmp_path, config, base_state):
+        base_state.pipeline.stage = "fix-chosen"
+        base_state.evidence["fix_verified"] = EvidenceEntry(
+            exit_code=1, last_run="2026-07-18", summary="AssertionError in test_foo"
+        )
+        base_state.evidence["lint"] = EvidenceEntry(exit_code=0, last_run="2026-07-18")
+        _write_change(tmp_path, base_state)
+
+        stage_def = resolve_stage("implement", "sentry")
+        verify_fn = load_verify(stage_def)
+        assert verify_fn(tmp_path, config) is False
+
+        state, _ = load_change(tmp_path / "change.md")
+        assert state.pipeline.diagnosis is not None
+        assert "AssertionError in test_foo" in state.pipeline.diagnosis.what_failed
+
+    def test_missing_evidence_shows_na(self, tmp_path, config, base_state):
+        base_state.pipeline.stage = "fix-chosen"
+        _write_change(tmp_path, base_state)
+
+        stage_def = resolve_stage("implement", "sentry")
+        verify_fn = load_verify(stage_def)
+        assert verify_fn(tmp_path, config) is False
+
+        state, _ = load_change(tmp_path / "change.md")
+        assert state.pipeline.diagnosis is not None
+        assert "N/A" in state.pipeline.blocked_reason
+
+    def test_gate_unresolved_writes_diagnosis(self, tmp_path, config, base_state):
+        base_state.pipeline.stage = "proven"
+        base_state.gates["fix_choice"] = Gate(required=True, resolved=None)
+        _write_change(tmp_path, base_state)
+        (tmp_path / "fix-options.md").write_text("# Options")
+
+        stage_def = resolve_stage("fix_options", "sentry")
+        verify_fn = load_verify(stage_def)
+        assert verify_fn(tmp_path, config) is False
+
+        state, _ = load_change(tmp_path / "change.md")
+        assert state.pipeline.diagnosis is not None
+        assert "fix_choice" in state.pipeline.diagnosis.what_failed
+        assert "gate" in state.pipeline.diagnosis.suggested_action.lower()
+
+    def test_success_clears_diagnosis(self, tmp_path, config, base_state):
+        base_state.pipeline.stage = "triaged"
+        from forger.state import Diagnosis
+
+        base_state.pipeline.diagnosis = Diagnosis(
+            what_failed="old failure", suggested_action="old"
+        )
+        base_state.pipeline.blocked_reason = "old"
+        _write_change(tmp_path, base_state)
+        (tmp_path / "analysis.md").write_text("# Root cause\nFound it.")
+
+        stage_def = resolve_stage("analyze", "sentry")
+        verify_fn = load_verify(stage_def)
+        assert verify_fn(tmp_path, config) is True
+
+        state, _ = load_change(tmp_path / "change.md")
+        assert state.pipeline.diagnosis is None
+        assert state.pipeline.blocked_reason is None
+
+    def test_evidence_summary_in_diagnosis(self, tmp_path, config, base_state):
+        base_state.pipeline.stage = "fix-chosen"
+        base_state.evidence["fix_verified"] = EvidenceEntry(
+            exit_code=1, last_run="2026-07-18", summary="3 tests fail"
+        )
+        base_state.evidence["lint"] = EvidenceEntry(
+            exit_code=0, last_run="2026-07-18", summary="clean"
+        )
+        _write_change(tmp_path, base_state)
+
+        stage_def = resolve_stage("implement", "sentry")
+        verify_fn = load_verify(stage_def)
+        assert verify_fn(tmp_path, config) is False
+
+        state, _ = load_change(tmp_path / "change.md")
+        diag = state.pipeline.diagnosis
+        assert diag is not None
+        assert diag.evidence_summary["fix_verified"] == "3 tests fail"
+        assert diag.evidence_summary["lint"] == "clean"
