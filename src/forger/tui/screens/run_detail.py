@@ -125,6 +125,14 @@ def _format_pipeline_event(ev: dict) -> Text:
         else:
             t.append(f"Pipeline finished → {final}", style="bold green")
             t.append(f" ({token_str} tokens, {total_elapsed}s)", style="dim")
+    elif event_type == "pipeline_scheduled":
+        fire_at: str = ev.get("fire_at", "")
+        fire_short = fire_at[:16].replace("T", " ") if fire_at else "?"
+        t.append(f"[{short_ts}] ", style="bold dim")
+        t.append(f"Scheduled for {fire_short}", style="bold blue")
+    elif event_type == "pipeline_schedule_cancelled":
+        t.append(f"[{short_ts}] ", style="bold dim")
+        t.append("Schedule cancelled", style="bold dark_orange")
     return t
 
 
@@ -139,7 +147,13 @@ def _format_event(ev: dict) -> Text | None:
         return _format_stage_end(ev)
     if event_type == "blocked":
         return _format_blocked(ev)
-    if event_type in ("pipeline_start", "pipeline_end", "pipeline_stopped"):
+    if event_type in (
+        "pipeline_start",
+        "pipeline_end",
+        "pipeline_stopped",
+        "pipeline_scheduled",
+        "pipeline_schedule_cancelled",
+    ):
         return _format_pipeline_event(ev)
     if event_type == "skip":
         t = Text()

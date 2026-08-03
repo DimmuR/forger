@@ -26,6 +26,8 @@ STATUS_STYLES: dict[RunStatus, str] = {
     RunStatus.CRASHED: "bold red reverse",
     RunStatus.BLOCKED: "bold yellow",
     RunStatus.NEEDS_ATTENTION: "bold dark_orange",
+    RunStatus.SCHEDULED: "bold blue",
+    RunStatus.MISSED: "bold dark_orange reverse",
 }
 
 
@@ -69,6 +71,17 @@ def format_tokens(count: int) -> str:
     if count >= 1000:
         return f"{count / 1000:.1f}k"
     return str(count)
+
+
+def format_fire_at(fire_at: datetime | None) -> str:
+    """Format scheduled fire time as local HH:MM or date+time if not today."""
+    if fire_at is None:
+        return "—"
+    local = fire_at.astimezone()
+    today = datetime.now().date()
+    if local.date() == today:
+        return f"@ {local.strftime('%H:%M')}"
+    return f"@ {local.strftime('%m-%d %H:%M')}"
 
 
 def stage_label(stage: str) -> str:
