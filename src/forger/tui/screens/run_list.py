@@ -51,7 +51,7 @@ class RunListScreen(Screen):
 
     def on_mount(self) -> None:
         table = self.query_one("#run-table", DataTable)
-        table.add_column("Issue ID", width=20)
+        table.add_column("Issue ID", width=30)
         table.add_column("Source", width=10)
         table.add_column("Stage", width=12)
         table.add_column("Status", width=18)
@@ -180,8 +180,18 @@ class RunListScreen(Screen):
         def on_result(result: IntakeRequest | None) -> None:
             if result is None:
                 return
-            label = result.params.get("issue_id", result.source)
-            self.notify(f"Starting {result.source} intake: {label}")
-            # TODO: spawn background subprocess (ticket #37)
+            from forger.tui.spawner import spawn_pipeline
+
+            issue_id = result.params.get("issue_id", "")
+            if not issue_id:
+                self.notify("No issue ID provided", severity="error")
+                return
+            try:
+                spawn_pipeline(result.source, issue_id, project_dir)
+            except OSError as exc:
+                self.notify(f"Spawn failed: {exc}", severity="error")
+                return
+            self.notify(f"Started {result.source} intake: {issue_id}")
+            self._load_runs()
 
         self.app.push_screen(NewIntakeModal(intakes), on_result)
