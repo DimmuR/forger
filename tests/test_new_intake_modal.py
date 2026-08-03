@@ -194,15 +194,21 @@ class TestRunListIntegration:
 
         asyncio.run(_test())
 
-    def test_submit_returns_to_run_list(self):
-        async def _test():
-            app = ForgerTUI(project_dir=Path("."))
-            async with app.run_test(size=(80, 24)) as pilot:
-                await pilot.press("n")
-                await pilot.pause()
-                app.screen.query_one("#param-issue_id").value = "TEST-99"
-                app.screen._submit()
-                await pilot.pause()
-                assert app.screen.__class__.__name__ == "RunListScreen"
+    def test_submit_returns_to_run_list(self, sentry_intake_dir):
+        from unittest.mock import MagicMock, patch
 
-        asyncio.run(_test())
+        with patch(
+            "forger.tui.spawner.subprocess.Popen", return_value=MagicMock(pid=1)
+        ):
+
+            async def _test():
+                app = ForgerTUI(project_dir=sentry_intake_dir)
+                async with app.run_test(size=(80, 24)) as pilot:
+                    await pilot.press("n")
+                    await pilot.pause()
+                    app.screen.query_one("#param-issue_id").value = "TEST-99"
+                    app.screen._submit()
+                    await pilot.pause()
+                    assert app.screen.__class__.__name__ == "RunListScreen"
+
+            asyncio.run(_test())

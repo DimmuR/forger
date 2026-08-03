@@ -151,9 +151,9 @@ class TestArchiveFromRunList:
         asyncio.run(_test())
         assert run_dir.exists()
 
-    def test_d_on_empty_list_does_nothing(self):
+    def test_d_on_empty_list_does_nothing(self, tmp_path):
         async def _test():
-            app = ForgerTUI(project_dir=Path("."))
+            app = ForgerTUI(project_dir=tmp_path)
             async with app.run_test(size=(80, 24)) as pilot:
                 await pilot.pause()
                 await pilot.press("d")
