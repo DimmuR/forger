@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from textual.binding import Binding, BindingType
 from textual.containers import Grid, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Label
-from textual.widgets._button import ButtonVariant
+
+ButtonVariant = Literal["default", "primary", "success", "warning", "error"]
 
 
 class ConfirmModal(ModalScreen[bool]):
@@ -67,17 +68,15 @@ class ConfirmModal(ModalScreen[bool]):
         body: str,
         *,
         variant: ButtonVariant = "warning",
-        error_border: bool = False,
     ) -> None:
         super().__init__()
         self._title = title
         self._body = body
         self._variant: ButtonVariant = variant
-        self._error_border = error_border
 
     def compose(self):
         dialog = Vertical(id="confirm-dialog")
-        if self._error_border:
+        if self._variant == "error":
             dialog.add_class("--error")
         with dialog:
             yield Label(self._title, id="confirm-title")

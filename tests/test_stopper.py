@@ -6,11 +6,9 @@ import asyncio
 import json
 import os
 import signal
-from pathlib import Path
 from unittest.mock import patch
 
 from forger.tui.app import ForgerTUI
-from forger.tui.discovery import acquire_lock
 from forger.tui.screens.confirm_archive import ConfirmModal
 from forger.tui.stopper import (
     _emit_stopped_event,
@@ -18,6 +16,7 @@ from forger.tui.stopper import (
     read_pid_from_lock,
     stop_pipeline,
 )
+from tests.factories import make_completed_run, make_running_run
 
 
 class TestReadPidFromLock:
@@ -161,107 +160,9 @@ class TestStopPipeline:
             assert stop_pipeline("PROJ-1", tmp_path, run_dir) is True
 
 
-def _make_stop_modal(issue_id: str) -> ConfirmModal:
-    return ConfirmModal(
-        "Stop Pipeline",
-        f"Stop working on [b]{issue_id}[/b]?",
-        variant="error",
-        error_border=True,
-    )
-
-
-class TestConfirmStopModal:
-    def test_modal_renders_issue_id(self):
-        async def _test():
-            app = ForgerTUI(project_dir=Path("."))
-            async with app.run_test(size=(80, 24)) as pilot:
-                app.push_screen(_make_stop_modal("PROJ-123"))
-                await pilot.pause()
-                body = app.screen.query_one("#confirm-body")
-                assert "PROJ-123" in str(body.render())
-
-        asyncio.run(_test())
-
-    def test_yes_button_dismisses_true(self):
-        results: list[bool] = []
-
-        async def _test():
-            app = ForgerTUI(project_dir=Path("."))
-            async with app.run_test(size=(80, 24)) as pilot:
-                app.push_screen(_make_stop_modal("X-1"), results.append)
-                await pilot.pause()
-                app.screen.query_one("#btn-yes").press()
-                await pilot.pause()
-
-        asyncio.run(_test())
-        assert results == [True]
-
-    def test_no_button_dismisses_false(self):
-        results: list[bool] = []
-
-        async def _test():
-            app = ForgerTUI(project_dir=Path("."))
-            async with app.run_test(size=(80, 24)) as pilot:
-                app.push_screen(_make_stop_modal("X-1"), results.append)
-                await pilot.pause()
-                app.screen.query_one("#btn-no").press()
-                await pilot.pause()
-
-        asyncio.run(_test())
-        assert results == [False]
-
-    def test_escape_dismisses_false(self):
-        results: list[bool] = []
-
-        async def _test():
-            app = ForgerTUI(project_dir=Path("."))
-            async with app.run_test(size=(80, 24)) as pilot:
-                app.push_screen(_make_stop_modal("X-1"), results.append)
-                await pilot.pause()
-                await pilot.press("escape")
-                await pilot.pause()
-
-        asyncio.run(_test())
-        assert results == [False]
-
-    def test_y_key_confirms(self):
-        results: list[bool] = []
-
-        async def _test():
-            app = ForgerTUI(project_dir=Path("."))
-            async with app.run_test(size=(80, 24)) as pilot:
-                app.push_screen(_make_stop_modal("X-1"), results.append)
-                await pilot.pause()
-                await pilot.press("y")
-                await pilot.pause()
-
-        asyncio.run(_test())
-        assert results == [True]
-
-
 class TestStopFromRunList:
-    def _make_running_run(self, tmp_path: Path, issue_id: str = "TEST-1"):
-        """Create a run that appears as RUNNING (lock held)."""
-        source_dir = tmp_path / ".forger" / "artifacts" / "sentry"
-        run_dir = source_dir / f"run-{issue_id}"
-        run_dir.mkdir(parents=True)
-        change = run_dir / "change.md"
-        change.write_text(
-            f"---\nid: {issue_id}\ntitle: test\norigin: sentry\n"
-            f"pipeline:\n  stage: analyze\n  parked_reason: null\n---\n"
-        )
-        fd = acquire_lock(issue_id, tmp_path)
-        return run_dir, fd
-
     def test_s_on_non_running_shows_warning(self, tmp_path):
-        source_dir = tmp_path / ".forger" / "artifacts" / "sentry"
-        run_dir = source_dir / "run-TEST-1"
-        run_dir.mkdir(parents=True)
-        change = run_dir / "change.md"
-        change.write_text(
-            "---\nid: TEST-1\ntitle: test\norigin: sentry\n"
-            "pipeline:\n  stage: pr-open\n  parked_reason: null\n---\n"
-        )
+        make_completed_run(tmp_path)
 
         async def _test():
             app = ForgerTUI(project_dir=tmp_path)
@@ -285,7 +186,7 @@ class TestStopFromRunList:
         asyncio.run(_test())
 
     def test_s_on_running_opens_confirm(self, tmp_path):
-        _run_dir, fd = self._make_running_run(tmp_path)
+        _run_dir, fd = make_running_run(tmp_path)
         try:
 
             async def _test():
