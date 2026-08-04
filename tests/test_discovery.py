@@ -271,7 +271,7 @@ class TestRunInfoStageIndex:
     def test_terminal_stage(self, tmp_path: Path):
         _make_run(tmp_path, "sentry", "P-2", stage="pr-open")
         runs = discover_runs(tmp_path)
-        assert runs[0].stage_index == 7  # push is last stage
+        assert runs[0].stage_index == 9  # create_pr is last stage
 
     def test_unknown_stage(self, tmp_path: Path):
         _make_run(tmp_path, "sentry", "P-3", stage="some-weird-state")

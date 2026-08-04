@@ -10,6 +10,7 @@ For v0.1.0 the pipeline is static and defined below.
 from dataclasses import dataclass, field
 
 __all__ = [
+    "EXTRA_STAGES",
     "STAGES",
     "STAGE_BY_NAME",
     "STAGE_BY_PRE_STATE",
@@ -61,6 +62,9 @@ class StageSpec:
     """Declarative verify check. If set, stages/__init__.py generates verify_fn from this
     instead of loading verify.py. Stages with custom verify.py (review, push) leave this None."""
 
+    needs_worktree: bool = False
+    """Whether this stage requires a worktree (code-modifying stages)."""
+
 
 # Ordered list — the pipeline executes top to bottom.
 STAGES: tuple[StageSpec, ...] = (
@@ -90,6 +94,7 @@ STAGES: tuple[StageSpec, ...] = (
             required_files=("proof.md",),
             evidence_checks=(("proof_test", 1),),
         ),
+        needs_worktree=True,
     ),
     StageSpec(
         name="fix_options",
@@ -101,6 +106,7 @@ STAGES: tuple[StageSpec, ...] = (
             required_files=("fix-options.md",),
             gate_resolved="fix_choice",
         ),
+        needs_worktree=True,
     ),
     StageSpec(
         name="implement",
@@ -110,6 +116,7 @@ STAGES: tuple[StageSpec, ...] = (
         verify=VerifyCheck(
             evidence_checks=(("fix_verified", 0), ("lint", 0)),
         ),
+        needs_worktree=True,
     ),
     StageSpec(
         name="review",
@@ -117,6 +124,7 @@ STAGES: tuple[StageSpec, ...] = (
         post_state="reviewed",
         label="Reviewed",
         artifacts=["reviews"],
+        needs_worktree=True,
         # Custom verify.py — multi-reviewer consensus, review loopback
     ),
     StageSpec(
@@ -128,25 +136,55 @@ STAGES: tuple[StageSpec, ...] = (
         verify=VerifyCheck(
             required_files=("issue.md", "commit.txt", "changelog.txt", "pr.md"),
         ),
+        needs_worktree=True,
     ),
     StageSpec(
         name="push",
         pre_state="drafted",
+        post_state="pushed",
+        label="Pushed",
+        needs_worktree=True,
+        # Custom verify.py — commit, push branch
+    ),
+    StageSpec(
+        name="create_issue",
+        pre_state="pushed",
+        post_state="issue-created",
+        label="Issue created",
+        # Custom verify.py — create GitHub issue from issue.md
+    ),
+    StageSpec(
+        name="create_pr",
+        pre_state="issue-created",
         post_state="pr-open",
         label="PR open",
-        # Custom verify.py — commit, push, create issue/PR
+        # Custom verify.py — create draft PR from pr.md
+    ),
+)
+
+# Stages not in the default pipeline but available for config-driven pipelines.
+EXTRA_STAGES: tuple[StageSpec, ...] = (
+    StageSpec(
+        name="create_patch",
+        pre_state="drafted",
+        post_state="patched",
+        label="Patched",
+        needs_worktree=True,
+        # Custom verify.py — git add -A, git diff --cached HEAD, write .patch
     ),
 )
 
 # --- Derived lookup tables (built once at import time) ---
 
-STAGE_BY_NAME: dict[str, StageSpec] = {s.name: s for s in STAGES}
+_ALL_STAGES = STAGES + EXTRA_STAGES
+
+STAGE_BY_NAME: dict[str, StageSpec] = {s.name: s for s in _ALL_STAGES}
 """Look up a StageSpec by its module name."""
 
 STAGE_BY_PRE_STATE: dict[str, StageSpec] = {s.pre_state: s for s in STAGES}
-"""Given a pipeline state, which stage runs next?"""
+"""Given a pipeline state, which stage runs next? (default pipeline only)"""
 
-STATE_LABEL: dict[str, str] = {s.post_state: s.label for s in STAGES}
+STATE_LABEL: dict[str, str] = {s.post_state: s.label for s in _ALL_STAGES}
 """Human-readable label for each post-state (plus terminal states below)."""
 STATE_LABEL["parked"] = "Parked"
 
@@ -176,4 +214,4 @@ def artifacts_for(stage_name: str) -> list[str]:
 
 
 # All valid stage names (for CLI validation).
-STAGE_NAMES: tuple[str, ...] = tuple(s.name for s in STAGES)
+STAGE_NAMES: tuple[str, ...] = tuple(s.name for s in _ALL_STAGES)
