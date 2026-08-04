@@ -3,6 +3,7 @@ from pydantic import ValidationError
 
 from forger.config import (
     BUILTIN_DEFAULTS,
+    PipelineConfig,
     ProjectConfig,
     _deep_merge,
     load_config,
@@ -17,6 +18,10 @@ def test_builtin_defaults():
     assert config.default_runner == "claude"
     assert "claude" in config.runners
     assert config.runners["claude"].timeout == 900
+    assert config.timeout.default == 900
+    assert "sentry" in config.pipelines
+    assert config.pipelines["sentry"].stages[0] == "sentry_intake"
+    assert config.pipelines["sentry"].stages[-1] == "create_pr"
 
 
 def test_deep_merge():
@@ -144,3 +149,90 @@ def test_branch_prefix_empty_rejected():
 def test_branch_prefix_whitespace_rejected():
     with pytest.raises(ValidationError, match="branch_prefix must be non-empty"):
         ProjectConfig(branch_prefix="  ")
+
+
+# --- PipelineConfig ---
+
+
+def test_pipeline_config_minimal():
+    p = PipelineConfig(stages=["analyze", "implement"])
+    assert p.stages == ["analyze", "implement"]
+    assert p.models == {}
+    assert p.tools == {}
+    assert p.effort == {}
+    assert p.timeout == {}
+
+
+def test_pipeline_config_with_overrides():
+    p = PipelineConfig(
+        stages=["analyze", "implement"],
+        models={"analyze": "opus"},
+        timeout={"implement": 1800},
+    )
+    assert p.models["analyze"] == "opus"
+    assert p.timeout["implement"] == 1800
+
+
+def test_pipeline_config_stages_required():
+    with pytest.raises(ValidationError):
+        PipelineConfig()
+
+
+# --- TimeoutConfig ---
+
+
+def test_timeout_config_defaults():
+    config = ProjectConfig()
+    assert config.timeout.default == 900
+    assert config.timeout.stages == {}
+
+
+def test_timeout_config_per_stage():
+    config = ProjectConfig(timeout={"default": 600, "stages": {"draft": 1200}})
+    assert config.timeout.default == 600
+    assert config.timeout.stages["draft"] == 1200
+
+
+# --- Pipeline stages replace on merge ---
+
+
+def test_deep_merge_pipeline_stages_replace():
+    base = {
+        "pipelines": {
+            "sentry": {
+                "stages": ["a", "b", "c"],
+                "models": {"a": "opus"},
+            }
+        }
+    }
+    override = {
+        "pipelines": {
+            "sentry": {
+                "stages": ["x", "y"],
+            }
+        }
+    }
+    result = _deep_merge(base, override)
+    assert result["pipelines"]["sentry"]["stages"] == ["x", "y"]
+    assert result["pipelines"]["sentry"]["models"] == {"a": "opus"}
+
+
+def test_deep_merge_pipeline_models_merge():
+    base = {
+        "pipelines": {
+            "sentry": {
+                "stages": ["a", "b"],
+                "models": {"a": "opus"},
+            }
+        }
+    }
+    override = {
+        "pipelines": {
+            "sentry": {
+                "models": {"b": "haiku"},
+            }
+        }
+    }
+    result = _deep_merge(base, override)
+    assert result["pipelines"]["sentry"]["stages"] == ["a", "b"]
+    assert result["pipelines"]["sentry"]["models"] == {"a": "opus", "b": "haiku"}
