@@ -22,6 +22,7 @@ __all__ = [
     "next_stage",
     "post_state_for",
     "pre_state_for",
+    "resolve_pipeline_stages",
 ]
 
 
@@ -211,6 +212,20 @@ def artifacts_for(stage_name: str) -> list[str]:
     """Return expected artifacts for a stage name."""
     spec = STAGE_BY_NAME.get(stage_name)
     return list(spec.artifacts) if spec else []
+
+
+def resolve_pipeline_stages(stage_names: list[str]) -> list[StageSpec]:
+    """Validate and resolve a list of stage names to StageSpec objects.
+
+    Raises ValueError if any name is not in the registry.
+    """
+    specs = []
+    for name in stage_names:
+        spec = STAGE_BY_NAME.get(name)
+        if spec is None:
+            raise ValueError(f"Unknown stage '{name}' — not in registry")
+        specs.append(spec)
+    return specs
 
 
 # All valid stage names (for CLI validation).

@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from forger.config import BUILTIN_DEFAULTS, ProjectConfig, RunnerTemplate
+from forger.config import (
+    BUILTIN_DEFAULTS,
+    PipelineConfig,
+    ProjectConfig,
+    RunnerTemplate,
+)
 from forger.orchestrator import (
     ensure_run_dir,
     find_run_dir,
@@ -426,3 +431,79 @@ def test_orchestrator_multi_stage_run(project_dir, config):
     assert final_state.evidence["fix_verified"].exit_code == 0
     assert final_state.evidence["lint"].exit_code == 0
     assert final_state.gates["fix_choice"].resolved == "a"
+
+
+def test_orchestrator_uses_pipeline_config(project_dir, config):
+    """Pipeline config for source drives stage list."""
+    config.pipelines["sentry"] = PipelineConfig(
+        stages=["sentry_intake", "analyze"],
+    )
+    run_dir = ensure_run_dir("sentry", "TEST-CFG", project_dir)
+
+    state = ChangeState(
+        id="sentry-TEST-CFG",
+        title="Test bug",
+        origin="sentry",
+        created="2026-07-18",
+        updated="2026-07-18",
+        pipeline=PipelineState(stage="triaged"),
+    )
+    save_change(run_dir / "change.md", state, "Test.")
+
+    script = (
+        f"#!/bin/bash\ncat > {run_dir}/analysis.md << 'EOF'\n# Root Cause\nBug.\nEOF\n"
+    )
+    script_path = run_dir / "runner.sh"
+    script_path.write_text(script)
+    script_path.chmod(script_path.stat().st_mode | stat.S_IEXEC)
+    config.runners["claude"] = RunnerTemplate(command=f"bash {script_path}", timeout=30)
+
+    outcome = run_pipeline(
+        source="sentry",
+        issue_id="TEST-CFG",
+        config=config,
+        project_dir=project_dir,
+        repo_dir=project_dir,
+    )
+
+    final_state, _ = load_change(run_dir / "change.md")
+    assert final_state.pipeline.stage == "analyzed"
+    assert outcome.stages_executed == 1
+    # Pipeline ends here — no prove stage in config
+    assert outcome.blocked_reason is None
+
+
+def test_orchestrator_fallback_without_pipeline_config(project_dir, config):
+    """Without pipeline config for source, falls back to STAGES."""
+    config.pipelines = {}
+    run_dir = ensure_run_dir("sentry", "TEST-FALLBACK", project_dir)
+
+    state = ChangeState(
+        id="sentry-TEST-FALLBACK",
+        title="Test bug",
+        origin="sentry",
+        created="2026-07-18",
+        updated="2026-07-18",
+        pipeline=PipelineState(stage="triaged"),
+    )
+    save_change(run_dir / "change.md", state, "Test.")
+
+    script = (
+        f"#!/bin/bash\ncat > {run_dir}/analysis.md << 'EOF'\n# Root Cause\nBug.\nEOF\n"
+    )
+    script_path = run_dir / "runner.sh"
+    script_path.write_text(script)
+    script_path.chmod(script_path.stat().st_mode | stat.S_IEXEC)
+    config.runners["claude"] = RunnerTemplate(command=f"bash {script_path}", timeout=30)
+
+    outcome = run_pipeline(
+        source="sentry",
+        issue_id="TEST-FALLBACK",
+        config=config,
+        project_dir=project_dir,
+        repo_dir=project_dir,
+    )
+
+    final_state, _ = load_change(run_dir / "change.md")
+    assert final_state.pipeline.stage == "analyzed"
+    assert outcome.stages_executed >= 1
