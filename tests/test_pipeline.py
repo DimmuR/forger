@@ -1,5 +1,7 @@
 """Tests for the pipeline topology module."""
 
+import pytest
+
 from forger.pipeline import (
     EXTRA_STAGES,
     STAGE_BY_NAME,
@@ -10,6 +12,7 @@ from forger.pipeline import (
     next_stage,
     post_state_for,
     pre_state_for,
+    resolve_pipeline_stages,
 )
 
 
@@ -112,3 +115,24 @@ def test_needs_worktree():
     assert "analyze" not in worktree_stages
     assert "create_issue" not in worktree_stages
     assert "create_pr" not in worktree_stages
+
+
+# --- resolve_pipeline_stages ---
+
+
+def test_resolve_pipeline_stages_valid():
+    specs = resolve_pipeline_stages(["analyze", "implement", "create_patch"])
+    assert [s.name for s in specs] == ["analyze", "implement", "create_patch"]
+    assert specs[2].needs_worktree is True
+
+
+def test_resolve_pipeline_stages_unknown():
+    with pytest.raises(ValueError, match="Unknown stage 'nonexistent'"):
+        resolve_pipeline_stages(["analyze", "nonexistent"])
+
+
+def test_resolve_pipeline_stages_full_sentry():
+    names = [s.name for s in STAGES]
+    specs = resolve_pipeline_stages(names)
+    assert len(specs) == len(STAGES)
+    assert specs[0].name == "sentry_intake"

@@ -14,20 +14,26 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from forger import worktree
-from forger.config import ProjectConfig
+from forger.config import PipelineConfig, ProjectConfig
 from forger.events import EventEmitter
-from forger.pipeline import artifacts_for, next_stage, post_state_for, pre_state_for
+from forger.pipeline import (
+    StageSpec,
+    artifacts_for,
+    post_state_for,
+    pre_state_for,
+    resolve_pipeline_stages,
+)
 from forger.prompt import render_prompt
 from forger.runner import (
     invoke_runner,
     resolve_effort,
     resolve_model,
     resolve_runner,
+    resolve_timeout,
     resolve_tools,
 )
 from forger.stages import StageDef, load_verify, resolve_stage
 from forger.state import (
-    TERMINAL_STAGES,
     ChangeState,
     Diagnosis,
     PipelineState,
@@ -37,9 +43,6 @@ from forger.state import (
 )
 
 MAX_STAGES = 15
-
-# Stages that modify code and require a worktree
-CODE_STAGES = {"prove", "fix_options", "implement", "review", "draft"}
 
 
 @dataclass
@@ -126,6 +129,9 @@ class PipelineRunner:
         self.until_stage = until_stage
         self.skip_stages = skip_stages
 
+        self.pipeline_config: PipelineConfig | None = config.pipelines.get(source)
+        self.stage_specs: list[StageSpec] = self._resolve_stages()
+
         self.run_dir = ensure_run_dir(source, issue_id, project_dir)
         self.canonical_run_dir = self.run_dir
         self.work_dir = repo_dir
@@ -134,6 +140,14 @@ class PipelineRunner:
         self.pipeline_start = time.monotonic()
         self.events = EventEmitter(self.run_dir)
         self._lock_fd: int | None = None
+        self._stage_cursor = 0
+
+    def _resolve_stages(self) -> list[StageSpec]:
+        if self.pipeline_config:
+            return resolve_pipeline_stages(self.pipeline_config.stages)
+        from forger.pipeline import STAGES
+
+        return list(STAGES)
 
     def _outcome(
         self,
@@ -257,6 +271,7 @@ class PipelineRunner:
         runner_template,
         allowed_tools: list[str] | None,
         effort: str | None = None,
+        timeout: int | None = None,
         prompt_path: Path | None = None,
         log_name: str | None = None,
         token_offset: int = 0,
@@ -295,6 +310,7 @@ class PipelineRunner:
             model,
             allowed_tools=allowed_tools,
             effort=effort,
+            timeout=timeout,
             log_file=log_file,
             event_emitter=self.events,
         )
@@ -367,12 +383,21 @@ class PipelineRunner:
         if stage_name == "review":
             return self._dispatch_review(stage_def, state)
 
-        model = resolve_model(stage_name, self.config)
+        pc = self.pipeline_config
+        model = resolve_model(stage_name, self.config, pc)
         runner = resolve_runner(self.config)
-        allowed_tools = resolve_tools(stage_name, self.config)
-        effort = resolve_effort(stage_name, self.config)
+        allowed_tools = resolve_tools(stage_name, self.config, pc)
+        effort = resolve_effort(stage_name, self.config, pc)
+        timeout = resolve_timeout(stage_name, self.config, pc)
         return self._invoke_stage(
-            stage_name, stage_def, state, model, runner, allowed_tools, effort=effort
+            stage_name,
+            stage_def,
+            state,
+            model,
+            runner,
+            allowed_tools,
+            effort=effort,
+            timeout=timeout,
         )
 
     def _dispatch_review(
@@ -390,10 +415,12 @@ class PipelineRunner:
                 role_file if role_file.exists() else stage_def.prompt_path
             )
 
-            model = reviewer.model or resolve_model("review", self.config)
+            pc = self.pipeline_config
+            model = reviewer.model or resolve_model("review", self.config, pc)
             runner = self.config.runners[reviewer.runner or self.config.default_runner]
-            allowed_tools = resolve_tools("review", self.config)
-            effort = resolve_effort("review", self.config)
+            allowed_tools = resolve_tools("review", self.config, pc)
+            effort = resolve_effort("review", self.config, pc)
+            timeout = resolve_timeout("review", self.config, pc)
 
             result = self._invoke_stage(
                 "review",
@@ -403,6 +430,7 @@ class PipelineRunner:
                 runner,
                 allowed_tools,
                 effort=effort,
+                timeout=timeout,
                 prompt_path=role_prompt_path,
                 log_name=f"review/{reviewer.role}",
                 token_offset=stage_tokens,
@@ -435,12 +463,12 @@ class PipelineRunner:
         self.stages_executed += 1
         return True
 
-    def _maybe_create_worktree(self, stage_name: str) -> None:
+    def _maybe_create_worktree(self, spec: StageSpec) -> None:
         """Create worktree before code-modifying stages if needed."""
         if not (
             self.config.worktree
             and self.work_dir == self.repo_dir
-            and stage_name in CODE_STAGES
+            and spec.needs_worktree
         ):
             return
         self.work_dir = worktree.create(
@@ -539,29 +567,32 @@ class PipelineRunner:
         """
         change_path = self.run_dir / "change.md"
 
-        # Determine which stage to run next
+        # First call: no change.md yet — first stage in list is intake
         if not change_path.exists():
-            stage_name: str | None = f"{self.source}_intake"
+            spec = self.stage_specs[0]
             state: ChangeState | None = None
         else:
             state, _ = load_change(change_path)
-            if state.pipeline.stage in TERMINAL_STAGES or state.pipeline.parked_reason:
-                stage_name = None
-            else:
-                stage_name = next_stage(state.pipeline.stage)
-
-        if stage_name is None:
-            blocked = None
-            if state and state.pipeline.parked_reason:
+            if state.pipeline.parked_reason:
                 blocked = f"Parked: {state.pipeline.parked_reason}"
                 self.events.emit("blocked", reason=blocked, gate=None)
+                return self._outcome(
+                    final_stage=state.pipeline.stage,
+                    stages_executed=self.stages_executed,
+                    blocked_reason=blocked,
+                )
+            spec = self._next_spec(state.pipeline.stage)
+
+        if spec is None:
             return self._outcome(
                 final_stage=state.pipeline.stage if state else "none",
                 stages_executed=self.stages_executed,
-                blocked_reason=blocked,
             )
 
+        stage_name = spec.name
+
         if self._maybe_skip(stage_name, change_path):
+            self._stage_cursor += 1
             return None
 
         try:
@@ -580,10 +611,10 @@ class PipelineRunner:
                 origin=self.source,
                 created=time.strftime("%Y-%m-%d"),
                 updated=time.strftime("%Y-%m-%d"),
-                pipeline=PipelineState(stage="intake"),
+                pipeline=PipelineState(stage=spec.pre_state),
             )
 
-        self._maybe_create_worktree(stage_name)
+        self._maybe_create_worktree(spec)
 
         stage_result = self._dispatch_stage(stage_name, stage_def, state)
         self.total_tokens += stage_result.tokens
@@ -598,7 +629,16 @@ class PipelineRunner:
                 blocked_reason=stage_result.blocked_reason,
             )
 
+        self._stage_cursor += 1
         return self._verify_and_report(stage_name, stage_def, stage_result)
+
+    def _next_spec(self, current_stage: str) -> StageSpec | None:
+        """Find next stage to run based on current pipeline state."""
+        for i, spec in enumerate(self.stage_specs):
+            if spec.pre_state == current_stage:
+                self._stage_cursor = i
+                return spec
+        return None
 
 
 def run_pipeline(
