@@ -4,10 +4,12 @@ __all__ = [
     "BUILTIN_DEFAULTS",
     "GLOBAL_CONFIG_PATH",
     "ModelConfig",
+    "PipelineConfig",
     "ProjectConfig",
     "ReviewConfig",
     "ReviewerDef",
     "RunnerTemplate",
+    "TimeoutConfig",
     "ToolsConfig",
     "load_config",
 ]
@@ -35,6 +37,11 @@ class EffortConfig(BaseModel):
     stages: dict[str, str] = {}
 
 
+class TimeoutConfig(BaseModel):
+    default: int = 900
+    stages: dict[str, int] = {}
+
+
 class ModelConfig(BaseModel):
     default: str = "sonnet"
     stages: dict[str, str] = {}
@@ -52,13 +59,23 @@ class ReviewConfig(BaseModel):
     max_loops: int = 2
 
 
+class PipelineConfig(BaseModel):
+    stages: list[str]
+    models: dict[str, str] = {}
+    tools: dict[str, list[str]] = {}
+    effort: dict[str, str] = {}
+    timeout: dict[str, int] = {}
+
+
 class ProjectConfig(BaseModel):
     models: ModelConfig = ModelConfig()
     effort: EffortConfig = EffortConfig()
+    timeout: TimeoutConfig = TimeoutConfig()
     tools: ToolsConfig = ToolsConfig()
     runners: dict[str, RunnerTemplate] = {}
     default_runner: str = "claude"
     review: ReviewConfig = ReviewConfig()
+    pipelines: dict[str, PipelineConfig] = {}
     commands: dict[str, str | dict[str, str]] = {}
     worktree: bool = True
     base_branch: str = "main"
@@ -101,6 +118,10 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
             "draft": "sonnet",
         },
     },
+    "timeout": {
+        "default": 900,
+        "stages": {},
+    },
     "tools": {
         "default": ["Read", "Write", "Edit", "Bash"],
         "stages": {
@@ -125,11 +146,31 @@ BUILTIN_DEFAULTS: dict[str, Any] = {
         },
     },
     "default_runner": "claude",
+    "pipelines": {
+        "sentry": {
+            "stages": [
+                "sentry_intake",
+                "analyze",
+                "prove",
+                "fix_options",
+                "implement",
+                "review",
+                "draft",
+                "push",
+                "create_issue",
+                "create_pr",
+            ],
+        },
+    },
 }
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
-    """Deep merge override into base. Override wins on conflicts."""
+    """Deep merge override into base. Override wins on conflicts.
+
+    Lists replace rather than merge — a pipeline's ``stages`` list is always
+    explicit, never appended to.
+    """
     result = base.copy()
     for key, value in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):

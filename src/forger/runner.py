@@ -14,6 +14,7 @@ __all__ = [
     "resolve_effort",
     "resolve_model",
     "resolve_runner",
+    "resolve_timeout",
     "resolve_tools",
 ]
 
@@ -30,7 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from forger.config import ProjectConfig, RunnerTemplate
+from forger.config import PipelineConfig, ProjectConfig, RunnerTemplate
 from forger.events import EventEmitter
 
 # Characters that are safe in template variable values.
@@ -52,19 +53,40 @@ def resolve_runner(config: ProjectConfig) -> RunnerTemplate:
     return config.runners[config.default_runner]
 
 
-def resolve_model(stage: str, config: ProjectConfig) -> str:
-    """Pick model for a stage from config."""
+def resolve_model(
+    stage: str, config: ProjectConfig, pipeline: PipelineConfig | None = None
+) -> str:
+    """Pick model: pipeline per-stage → global per-stage → global default."""
+    if pipeline and stage in pipeline.models:
+        return pipeline.models[stage]
     return config.models.stages.get(stage, config.models.default)
 
 
-def resolve_tools(stage: str, config: ProjectConfig) -> list[str]:
-    """Pick allowed tools list for a stage from config."""
+def resolve_tools(
+    stage: str, config: ProjectConfig, pipeline: PipelineConfig | None = None
+) -> list[str]:
+    """Pick tools: pipeline per-stage → global per-stage → global default."""
+    if pipeline and stage in pipeline.tools:
+        return pipeline.tools[stage]
     return config.tools.stages.get(stage, config.tools.default)
 
 
-def resolve_effort(stage: str, config: ProjectConfig) -> str | None:
-    """Pick effort level for a stage from config, or None for default."""
+def resolve_effort(
+    stage: str, config: ProjectConfig, pipeline: PipelineConfig | None = None
+) -> str | None:
+    """Pick effort: pipeline per-stage → global per-stage → global default."""
+    if pipeline and stage in pipeline.effort:
+        return pipeline.effort[stage]
     return config.effort.stages.get(stage, config.effort.default)
+
+
+def resolve_timeout(
+    stage: str, config: ProjectConfig, pipeline: PipelineConfig | None = None
+) -> int:
+    """Pick timeout: pipeline per-stage → global per-stage → global default."""
+    if pipeline and stage in pipeline.timeout:
+        return pipeline.timeout[stage]
+    return config.timeout.stages.get(stage, config.timeout.default)
 
 
 def _tool_input_summary(tool_name: str, tool_input: dict[str, Any]) -> str:
