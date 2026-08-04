@@ -568,6 +568,7 @@ class PipelineRunner:
         change_path = self.run_dir / "change.md"
 
         # First call: no change.md yet — first stage in list is intake
+        spec: StageSpec | None
         if not change_path.exists():
             spec = self.stage_specs[0]
             state: ChangeState | None = None
