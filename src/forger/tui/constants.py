@@ -6,16 +6,23 @@ from datetime import UTC, datetime
 
 from forger.tui.discovery import RunStatus
 
-STAGE_SHORT: dict[str, str] = {
+_SHORT_OVERRIDES: dict[str, str] = {
     "sentry_intake": "intake",
-    "analyze": "analyze",
-    "prove": "prove",
     "fix_options": "fix_opts",
     "implement": "impl",
-    "review": "review",
-    "draft": "draft",
-    "push": "push",
+    "create_issue": "issue",
+    "create_pr": "pr",
+    "create_patch": "patch",
 }
+
+
+def _build_stage_short() -> dict[str, str]:
+    from forger.pipeline import STAGE_BY_NAME
+
+    return {name: _SHORT_OVERRIDES.get(name, name) for name in STAGE_BY_NAME}
+
+
+STAGE_SHORT: dict[str, str] = _build_stage_short()
 
 STATUS_STYLES: dict[RunStatus, str] = {
     RunStatus.RUNNING: "bold cyan",
@@ -86,9 +93,9 @@ def format_fire_at(fire_at: datetime | None) -> str:
 
 def stage_label(stage: str) -> str:
     """Map pipeline state string to short display name."""
-    from forger.pipeline import STAGES
+    from forger.pipeline import STAGE_BY_NAME
 
-    for spec in STAGES:
+    for spec in STAGE_BY_NAME.values():
         if spec.post_state == stage or spec.pre_state == stage:
             return STAGE_SHORT.get(spec.name, spec.name)
     return stage

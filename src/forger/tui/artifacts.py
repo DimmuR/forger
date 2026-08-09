@@ -5,24 +5,31 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from forger.pipeline import STAGES
+from forger.pipeline import STAGE_BY_NAME, STAGES
 
 _FILE_TO_STAGE: dict[str, str] = {}
-for _spec in STAGES:
+for _spec in STAGE_BY_NAME.values():
     for _artifact in _spec.artifacts:
         _FILE_TO_STAGE[_artifact] = _spec.name
 
 _EXCLUDED = {"events.jsonl", "run.log"}
 
+_COLOR_CYCLE = (
+    "cyan",
+    "bright_blue",
+    "magenta",
+    "yellow",
+    "green",
+    "dark_orange",
+    "bright_cyan",
+    "bright_green",
+    "bright_magenta",
+    "bright_yellow",
+    "blue",
+)
+
 STAGE_COLORS: dict[str, str] = {
-    "sentry_intake": "cyan",
-    "analyze": "bright_blue",
-    "prove": "magenta",
-    "fix_options": "yellow",
-    "implement": "green",
-    "review": "dark_orange",
-    "draft": "bright_cyan",
-    "push": "bright_green",
+    name: _COLOR_CYCLE[i % len(_COLOR_CYCLE)] for i, name in enumerate(STAGE_BY_NAME)
 }
 
 STAGE_ORDER: dict[str, int] = {spec.name: i for i, spec in enumerate(STAGES)}

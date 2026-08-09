@@ -51,7 +51,7 @@ class RunInfo:
 
     @property
     def stage_index(self) -> int:
-        """0-based index of current stage in pipeline, -1 if unknown."""
+        """0-based index of current stage in default pipeline, -1 if unknown."""
         for i, spec in enumerate(STAGES):
             if self.stage in (spec.name, spec.post_state, spec.pre_state):
                 return i

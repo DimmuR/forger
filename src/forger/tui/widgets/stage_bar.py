@@ -7,7 +7,7 @@ from typing import Any
 from rich.text import Text
 from textual.widgets import Static
 
-from forger.pipeline import STAGES
+from forger.pipeline import STAGES, StageSpec
 from forger.tui.constants import STAGE_SHORT, format_seconds
 from forger.tui.discovery import RunInfo, RunStatus
 
@@ -15,9 +15,15 @@ from forger.tui.discovery import RunInfo, RunStatus
 class StageProgressBar(Static):
     """Horizontal pipeline stage indicator with color-coded progress."""
 
-    def __init__(self, run: RunInfo, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        run: RunInfo,
+        stages: tuple[StageSpec, ...] | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self.run = run
+        self.stages = stages or STAGES
         self.stage_times: dict[str, int] = {}
 
     def update_run(self, run: RunInfo) -> None:
@@ -28,12 +34,20 @@ class StageProgressBar(Static):
         self.stage_times = stage_times
         self.refresh()
 
+    def _stage_index(self) -> int:
+        """Find current stage index within this bar's stage list."""
+        stage = self.run.stage
+        for i, spec in enumerate(self.stages):
+            if stage in (spec.name, spec.post_state, spec.pre_state):
+                return i
+        return -1
+
     def render(self) -> Text:
         parts = Text()
-        idx = self.run.stage_index
+        idx = self._stage_index()
         status = self.run.status
 
-        for i, spec in enumerate(STAGES):
+        for i, spec in enumerate(self.stages):
             short = STAGE_SHORT.get(spec.name, spec.name)
             elapsed = self.stage_times.get(spec.name)
             label = f" {short} "
