@@ -13,7 +13,7 @@ from textual import work
 from textual.binding import Binding, BindingType
 from textual.screen import Screen
 from textual.timer import Timer
-from textual.widgets import DataTable, Footer, Header, Label
+from textual.widgets import DataTable, Footer, Header, Input, Label
 from textual.widgets.data_table import RowKey
 
 from forger.tui.constants import (
@@ -42,6 +42,8 @@ class RunListScreen(Screen):
         Binding("a", "show_archive", "Archive"),
         Binding("a", "show_active", "Active"),
         Binding("u", "unarchive_run", "Unarchive"),
+        Binding("slash", "start_filter", "Search"),
+        Binding("escape", "clear_filter", "Clear", show=False),
         Binding("f5", "refresh_runs", "Refresh"),
         Binding("ctrl+q", "quit_app", "Quit"),
     ]
@@ -64,14 +66,17 @@ class RunListScreen(Screen):
 
     def __init__(self) -> None:
         super().__init__()
+        self._all_runs: list[RunInfo] = []
         self._runs: list[RunInfo] = []
         self._row_keys: list[RowKey] = []
         self._schedule_timers: dict[str, Timer] = {}
         self._viewing_archive: bool = False
+        self._filter_text: str = ""
 
     def compose(self):
         yield Header(show_clock=True)
         yield Label("FORGER — Pipeline Dashboard", id="title-bar")
+        yield Input(placeholder="Filter by issue ID…", id="filter-input")
         yield DataTable(id="run-table", cursor_type="row")
         yield Label(
             "No runs found. Start a pipeline with: forger run sentry <issue-id>",
@@ -80,6 +85,7 @@ class RunListScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
+        self.query_one("#filter-input", Input).display = False
         table = self.query_one("#run-table", DataTable)
         table.add_column("Issue ID", width=30)
         table.add_column("Source", width=10)
@@ -90,12 +96,21 @@ class RunListScreen(Screen):
         table.add_column("Title")
         self._load_runs()
         self._recover_schedules()
+        self.set_focus(table)
         self.set_interval(self.REFRESH_INTERVAL, self._load_runs)
 
     def _load_runs(self) -> None:
         project_dir: Path = self.app.project_dir  # type: ignore[attr-defined]
-        runs = discover_runs(project_dir, archived=self._viewing_archive)
-        self._update_table(runs)
+        self._all_runs = discover_runs(project_dir, archived=self._viewing_archive)
+        self._apply_filter()
+
+    def _apply_filter(self) -> None:
+        if self._filter_text:
+            ft = self._filter_text.lower()
+            filtered = [r for r in self._all_runs if ft in r.issue_id.lower()]
+        else:
+            filtered = self._all_runs
+        self._update_table(filtered)
 
     def _update_table(self, runs: list[RunInfo]) -> None:
         table = self.query_one("#run-table", DataTable)
@@ -213,7 +228,36 @@ class RunListScreen(Screen):
             return not self._viewing_archive
         if action in self._ARCHIVE_ONLY:
             return self._viewing_archive
+        if action == "start_filter":
+            return not self._filter_active
+        if action == "clear_filter":
+            return self._filter_active
         return True
+
+    @property
+    def _filter_active(self) -> bool:
+        return self.query_one("#filter-input").display  # type: ignore[return-value]
+
+    def action_start_filter(self) -> None:
+        fi = self.query_one("#filter-input", Input)
+        fi.display = True
+        fi.value = ""
+        self.set_focus(fi)
+        self.refresh_bindings()
+
+    def action_clear_filter(self) -> None:
+        fi = self.query_one("#filter-input", Input)
+        fi.display = False
+        fi.value = ""
+        self._filter_text = ""
+        self.set_focus(self.query_one("#run-table"))
+        self._apply_filter()
+        self.refresh_bindings()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "filter-input":
+            self._filter_text = event.value
+            self._apply_filter()
 
     def _switch_view(self) -> None:
         title = (
@@ -361,7 +405,7 @@ class RunListScreen(Screen):
                 self.notify("No issue ID provided", severity="error")
                 return
 
-            if self._find_run(issue_id):
+            if any(r.issue_id == issue_id for r in self._all_runs):
                 self.notify(f"{issue_id} is already on the list", severity="warning")
                 return
 
@@ -415,7 +459,7 @@ class RunListScreen(Screen):
 
     def _recover_schedules(self) -> None:
         """Re-arm timers for SCHEDULED runs found on startup."""
-        for run in self._runs:
+        for run in self._all_runs:
             if run.status == RunStatus.SCHEDULED and run.fire_at:
                 self._arm_timer(run.source, run.issue_id, run.fire_at)
 
