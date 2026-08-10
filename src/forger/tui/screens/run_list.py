@@ -39,6 +39,9 @@ class RunListScreen(Screen):
         Binding("r", "restart_run", "Restart"),
         Binding("d", "archive_run", "Archive"),
         Binding("c", "cancel_schedule", "Cancel"),
+        Binding("a", "show_archive", "Archive"),
+        Binding("a", "show_active", "Active"),
+        Binding("u", "unarchive_run", "Unarchive"),
         Binding("f5", "refresh_runs", "Refresh"),
         Binding("ctrl+q", "quit_app", "Quit"),
     ]
@@ -47,11 +50,24 @@ class RunListScreen(Screen):
 
     CANCELLABLE = frozenset({RunStatus.SCHEDULED, RunStatus.MISSED})
 
+    _ACTIVE_ONLY = frozenset(
+        {
+            "new_intake",
+            "stop_run",
+            "restart_run",
+            "archive_run",
+            "cancel_schedule",
+            "show_archive",
+        }
+    )
+    _ARCHIVE_ONLY = frozenset({"unarchive_run", "show_active"})
+
     def __init__(self) -> None:
         super().__init__()
         self._runs: list[RunInfo] = []
         self._row_keys: list[RowKey] = []
         self._schedule_timers: dict[str, Timer] = {}
+        self._viewing_archive: bool = False
 
     def compose(self):
         yield Header(show_clock=True)
@@ -78,7 +94,7 @@ class RunListScreen(Screen):
 
     def _load_runs(self) -> None:
         project_dir: Path = self.app.project_dir  # type: ignore[attr-defined]
-        runs = discover_runs(project_dir)
+        runs = discover_runs(project_dir, archived=self._viewing_archive)
         self._update_table(runs)
 
     def _update_table(self, runs: list[RunInfo]) -> None:
@@ -191,6 +207,41 @@ class RunListScreen(Screen):
             action(found[1])
 
         self.app.push_screen(ConfirmModal(title, body, variant=variant), on_confirm)
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action in self._ACTIVE_ONLY:
+            return not self._viewing_archive
+        if action in self._ARCHIVE_ONLY:
+            return self._viewing_archive
+        return True
+
+    def _switch_view(self) -> None:
+        title = (
+            "FORGER — Archive"
+            if self._viewing_archive
+            else "FORGER — Pipeline Dashboard"
+        )
+        self.query_one("#title-bar", Label).update(title)
+        empty = self.query_one("#empty-message", Label)
+        if self._viewing_archive:
+            empty.update("No archived runs.")
+        else:
+            empty.update(
+                "No runs found. Start a pipeline with: forger run sentry <issue-id>"
+            )
+        self.refresh_bindings()
+        self._load_runs()
+
+    def action_show_archive(self) -> None:
+        self._viewing_archive = True
+        self._switch_view()
+
+    def action_show_active(self) -> None:
+        self._viewing_archive = False
+        self._switch_view()
+
+    def action_unarchive_run(self) -> None:
+        self.notify("Unarchive not implemented yet", severity="warning")
 
     def action_archive_run(self) -> None:
         run = self._selected_run()
