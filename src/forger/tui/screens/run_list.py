@@ -25,6 +25,7 @@ from forger.tui.constants import (
 )
 from forger.tui.discovery import RunInfo, RunStatus, discover_runs
 from forger.tui.screens.confirm_archive import ButtonVariant, ConfirmModal
+from forger.tui.screens.duplicate_modal import DupeAction, DuplicateModal
 from forger.tui.spawner import cancel_schedule, schedule_pipeline, spawn_pipeline
 from forger.tui.stopper import stop_pipeline
 
@@ -413,15 +414,37 @@ class RunListScreen(Screen):
             )
         self.app.call_from_thread(self._load_runs)
 
+    def _build_known_runs(self) -> dict[str, RunInfo]:
+        """Build lookup of all known runs (active + archived) by issue_id."""
+        project_dir: Path = self.app.project_dir  # type: ignore[attr-defined]
+        known: dict[str, RunInfo] = {}
+        for r in self._all_runs:
+            known[r.issue_id] = r
+        other_pool = discover_runs(project_dir, archived=not self._viewing_archive)
+        for r in other_pool:
+            if r.issue_id not in known:
+                known[r.issue_id] = r
+        return known
+
     def action_new_intake(self) -> None:
         from forger.tui.intakes import discover_intakes
-        from forger.tui.screens.new_intake import IntakeRequest, NewIntakeModal
+        from forger.tui.screens.new_intake import (
+            DupeEntry,
+            IntakeRequest,
+            NewIntakeModal,
+        )
 
         project_dir: Path = self.app.project_dir  # type: ignore[attr-defined]
         intakes = discover_intakes(project_dir)
         if not intakes:
             self.notify("No intakes found", severity="warning")
             return
+
+        known = self._build_known_runs()
+        known_entries: dict[str, DupeEntry] = {
+            iid: (r.status.value, stage_label(r.stage), r.is_archived)
+            for iid, r in known.items()
+        }
 
         def on_result(result: IntakeRequest | None) -> None:
             if result is None:
@@ -432,34 +455,78 @@ class RunListScreen(Screen):
                 self.notify("No issue ID provided", severity="error")
                 return
 
-            if any(r.issue_id == issue_id for r in self._all_runs):
-                self.notify(f"{issue_id} is already on the list", severity="warning")
+            dupe = known.get(issue_id)
+            if dupe:
+                self._show_dupe_modal(dupe, result)
                 return
 
-            if result.fire_at:
-                try:
-                    schedule_pipeline(
-                        result.source,
-                        issue_id,
-                        project_dir,
-                        result.fire_at,
-                        result.params,
-                    )
-                except OSError as exc:
-                    self.notify(f"Schedule failed: {exc}", severity="error")
-                    return
-                self._arm_timer(result.source, issue_id, result.fire_at)
-                self.notify(f"Scheduled {issue_id} for {result.fire_at:%H:%M}")
-            else:
-                try:
-                    spawn_pipeline(result.source, issue_id, project_dir)
-                except OSError as exc:
-                    self.notify(f"Spawn failed: {exc}", severity="error")
-                    return
-                self.notify(f"Started {result.source} intake: {issue_id}")
-            self._load_runs()
+            self._start_intake(result)
 
-        self.app.push_screen(NewIntakeModal(intakes), on_result)
+        self.app.push_screen(NewIntakeModal(intakes, known_entries), on_result)
+
+    def _start_intake(self, result: object) -> None:
+        from forger.tui.screens.new_intake import IntakeRequest
+
+        if not isinstance(result, IntakeRequest):
+            return
+        project_dir: Path = self.app.project_dir  # type: ignore[attr-defined]
+        issue_id = result.params.get("issue_id", "")
+
+        if result.fire_at:
+            try:
+                schedule_pipeline(
+                    result.source,
+                    issue_id,
+                    project_dir,
+                    result.fire_at,
+                    result.params,
+                )
+            except OSError as exc:
+                self.notify(f"Schedule failed: {exc}", severity="error")
+                return
+            self._arm_timer(result.source, issue_id, result.fire_at)
+            self.notify(f"Scheduled {issue_id} for {result.fire_at:%H:%M}")
+        else:
+            try:
+                spawn_pipeline(result.source, issue_id, project_dir)
+            except OSError as exc:
+                self.notify(f"Spawn failed: {exc}", severity="error")
+                return
+            self.notify(f"Started {result.source} intake: {issue_id}")
+        self._load_runs()
+
+    def _show_dupe_modal(self, dupe: RunInfo, request: object) -> None:
+        from forger.tui.screens.new_intake import IntakeRequest
+        from forger.tui.screens.run_detail import RunDetailScreen
+
+        if not isinstance(request, IntakeRequest):
+            return
+
+        def on_action(action: DupeAction | None) -> None:
+            if action is None or action == "cancel":
+                return
+            if action == "view":
+                self.app.push_screen(RunDetailScreen(dupe))
+            elif action == "restart":
+                self._do_restart_bg(dupe)
+            elif action == "unarchive":
+                source_dir = dupe.run_dir.parent.parent
+                dest = source_dir / dupe.run_dir.name
+                if dest.exists():
+                    self.notify(
+                        f"{dupe.issue_id} already in active list",
+                        severity="warning",
+                    )
+                    return
+                try:
+                    dupe.run_dir.rename(dest)
+                except OSError as exc:
+                    self.notify(f"Unarchive failed: {exc}", severity="error")
+                    return
+                self.notify(f"Unarchived {dupe.issue_id}")
+                self._load_runs()
+
+        self.app.push_screen(DuplicateModal(dupe), on_action)
 
     def _arm_timer(self, source: str, issue_id: str, fire_at: datetime) -> None:
         """Arm a Textual timer to fire a scheduled run."""
