@@ -13,6 +13,8 @@ from textual.widgets import Button, Input, Label, Select, Switch
 
 from forger.tui.intakes import IntakeConfig, IntakeParam
 
+DupeEntry = tuple[str, str, bool]  # (status_value, stage, is_archived)
+
 
 def _parse_schedule(raw: str) -> datetime | None:
     """Parse schedule string. Accepts 'HH:MM' (next occurrence) or 'YYYY-MM-DD HH:MM'."""
@@ -111,6 +113,12 @@ class NewIntakeModal(ModalScreen[IntakeRequest | None]):
         margin-bottom: 1;
     }
 
+    #dupe-warning {
+        color: $warning;
+        padding: 0;
+        display: none;
+    }
+
     #button-bar {
         layout: horizontal;
         width: 100%;
@@ -124,11 +132,16 @@ class NewIntakeModal(ModalScreen[IntakeRequest | None]):
     }
     """
 
-    def __init__(self, intakes: list[IntakeConfig]) -> None:
+    def __init__(
+        self,
+        intakes: list[IntakeConfig],
+        known_runs: dict[str, DupeEntry] | None = None,
+    ) -> None:
         super().__init__()
         self._intakes = intakes
         self._intake_map = {cfg.source: cfg for cfg in intakes}
         self._current: IntakeConfig | None = intakes[0] if intakes else None
+        self._known_runs = known_runs or {}
 
     def compose(self):
         with Vertical(id="intake-dialog"):
@@ -144,6 +157,7 @@ class NewIntakeModal(ModalScreen[IntakeRequest | None]):
             )
 
             yield Vertical(id="param-container")
+            yield Label("", id="dupe-warning")
 
             yield Label("Schedule (leave empty for now)", classes="schedule-label")
             yield Input(
@@ -203,6 +217,23 @@ class NewIntakeModal(ModalScreen[IntakeRequest | None]):
             )
 
         return [label, widget]
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "param-issue_id":
+            return
+        self._check_dupe(event.value.strip())
+
+    def _check_dupe(self, issue_id: str) -> None:
+        warning = self.query_one("#dupe-warning", Label)
+        if not issue_id or issue_id not in self._known_runs:
+            warning.display = False
+            return
+        status_val, stage, archived = self._known_runs[issue_id]
+        loc = "archived" if archived else "active"
+        warning.update(
+            f"⚠ {issue_id} already exists ({status_val.upper()}, {stage}) [{loc}]"
+        )
+        warning.display = True
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-cancel":
