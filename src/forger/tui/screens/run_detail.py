@@ -329,28 +329,35 @@ class RunDetailScreen(Screen):
         except Exception:
             return
         diag = state.pipeline.diagnosis
-        if not diag:
+        parked = state.pipeline.parked_reason
+        if not diag and not parked:
             return
         log = self.query_one("#event-log", RichLog)
         log.write(Text())
         header = Text()
         header.append("  ─── Diagnosis ───", style="bold yellow")
         log.write(header)
-        what = Text()
-        what.append("  Failed: ", style="bold red")
-        what.append(diag.what_failed)
-        log.write(what)
-        if diag.evidence_summary:
-            for key, summary in diag.evidence_summary.items():
-                ev_line = Text()
-                ev_line.append(f"    {key}: ", style="dim")
-                ev_line.append(summary)
-                log.write(ev_line)
-        if diag.suggested_action:
-            action = Text()
-            action.append("  Next: ", style="bold green")
-            action.append(diag.suggested_action)
-            log.write(action)
+        if diag:
+            what = Text()
+            what.append("  Failed: ", style="bold red")
+            what.append(diag.what_failed)
+            log.write(what)
+            if diag.evidence_summary:
+                for key, summary in diag.evidence_summary.items():
+                    ev_line = Text()
+                    ev_line.append(f"    {key}: ", style="dim")
+                    ev_line.append(summary)
+                    log.write(ev_line)
+            if diag.suggested_action:
+                action = Text()
+                action.append("  Next: ", style="bold green")
+                action.append(diag.suggested_action)
+                log.write(action)
+        else:
+            what = Text()
+            what.append("  Needs attention: ", style="bold dark_orange")
+            what.append(parked)  # type: ignore[arg-type]
+            log.write(what)
 
     def _load_existing_events(self) -> None:
         """Load all existing events from events.jsonl files."""
