@@ -285,7 +285,34 @@ class RunListScreen(Screen):
         self._switch_view()
 
     def action_unarchive_run(self) -> None:
-        self.notify("Unarchive not implemented yet", severity="warning")
+        run = self._selected_run()
+        if not run:
+            return
+
+        def guard(r: RunInfo) -> str | None:
+            source_dir = r.run_dir.parent.parent
+            dest = source_dir / r.run_dir.name
+            if dest.exists():
+                return f"{r.issue_id} already exists in active list — cannot unarchive"
+            return None
+
+        def do_unarchive(r: RunInfo) -> None:
+            source_dir = r.run_dir.parent.parent
+            dest = source_dir / r.run_dir.name
+            try:
+                r.run_dir.rename(dest)
+            except OSError as exc:
+                self.notify(f"Unarchive failed: {exc}", severity="error")
+                return
+            self.notify(f"Unarchived {r.issue_id}")
+            self._load_runs()
+
+        self._confirm_action(
+            title="Unarchive Run",
+            body=f"Unarchive [b]{run.issue_id}[/b]?\nThis moves it back to the active list.",
+            guard=guard,
+            action=do_unarchive,
+        )
 
     def action_archive_run(self) -> None:
         run = self._selected_run()
