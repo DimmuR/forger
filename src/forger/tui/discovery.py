@@ -44,6 +44,7 @@ class RunInfo:
     title: str
     run_dir: Path
     parked_reason: str | None = None
+    is_archived: bool = False
     has_events: bool = False
     started_at: datetime | None = None
     ended_at: datetime | None = None
@@ -221,10 +222,11 @@ def _read_event_summary(events_path: Path) -> _EventSummary:
     )
 
 
-def discover_runs(project_dir: Path) -> list[RunInfo]:
+def discover_runs(project_dir: Path, *, archived: bool = False) -> list[RunInfo]:
     """Scan .forger/artifacts/ for all runs and their status.
 
-    Returns list sorted by source then issue_id.
+    When archived=True, scans archive/ subdirectories instead of active ones.
+    Returns list sorted by most recent first.
     """
     artifacts_dir = project_dir / ".forger" / "artifacts"
     if not artifacts_dir.exists():
@@ -236,7 +238,15 @@ def discover_runs(project_dir: Path) -> list[RunInfo]:
         if not source_dir.is_dir() or source_dir.name == "archive":
             continue
 
-        for run_dir in sorted(source_dir.iterdir()):
+        if archived:
+            archive_dir = source_dir / "archive"
+            if not archive_dir.is_dir():
+                continue
+            run_dirs = sorted(archive_dir.iterdir())
+        else:
+            run_dirs = sorted(source_dir.iterdir())
+
+        for run_dir in run_dirs:
             if run_dir.name == "archive" or not run_dir.is_dir():
                 continue
 
@@ -266,6 +276,7 @@ def discover_runs(project_dir: Path) -> list[RunInfo]:
                             status=sched_status,
                             title=bare_id,
                             run_dir=run_dir,
+                            is_archived=archived,
                             has_events=True,
                             fire_at=ev.fire_at,
                         )
@@ -284,6 +295,7 @@ def discover_runs(project_dir: Path) -> list[RunInfo]:
                         status=RunStatus.RUNNING,
                         title=bare_id,
                         run_dir=run_dir,
+                        is_archived=archived,
                         has_events=events_path.exists(),
                         started_at=ev.started_at,
                         ended_at=ev.ended_at,
@@ -338,6 +350,7 @@ def discover_runs(project_dir: Path) -> list[RunInfo]:
                     title=state.title,
                     run_dir=run_dir,
                     parked_reason=state.pipeline.parked_reason,
+                    is_archived=archived,
                     has_events=events_path.exists()
                     or (run_dir / "events.jsonl").exists(),
                     started_at=ev.started_at,

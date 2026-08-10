@@ -254,7 +254,7 @@ class RunDetailScreen(Screen):
             self._show_run_gone()
             return
         project_dir: Path = self.app.project_dir  # type: ignore[attr-defined]
-        runs = discover_runs(project_dir)
+        runs = discover_runs(project_dir, archived=self.run.is_archived)
         for r in runs:
             if r.issue_id == self.run.issue_id and r.source == self.run.source:
                 self.run = r
